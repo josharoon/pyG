@@ -1,4 +1,6 @@
 """simpleRotoDataset.py - A simple dataset for testing and training rotoscoping models."""
+import math
+
 import torch
 from pathlib import Path
 from torch_geometric.data import Data, Dataset,download_url
@@ -35,13 +37,7 @@ class SimpleRotoDataset(Dataset):
         shape['leftTangent']=[float(x) for x in shape['leftTangent']]
         shape['rightTangent']=shape['rightTangent'].replace('{','').replace('}','').split(',')
         shape['rightTangent']=[float(x) for x in shape['rightTangent']]
-
-
-
-
-
         #convert to point2D object
-
         return point2D(shape['center'],shape['leftTangent'],shape['rightTangent'])
     def getPoints2DList(self, pointList):
         """convert a list of json points to a list of point2D objects"""
@@ -99,8 +95,57 @@ class SimpleRotoDataset(Dataset):
             return image,label
 
 
+class ellipsoid():
+        """return an ellipse shape of Npoints"""
+        def __init__(self):
+            self.Npoints=10
+            self.max_x=100
+            self.max_y=100
+            self.tan_len=10
+            self.windowsize=224
+            self.createShapeGraph()
+        def createPoints(self):
+            """given a set number of points create a set of x,y points on an ellipse shape"""
+            points=[]
+            for i in range(self.Npoints):
+                x=math.sin(i*2*math.pi/self.Npoints)*self.max_x
+                y=math.cos(i*2*math.pi/self.Npoints)*self.max_y
+                points.append([x,y])
+            #scale points to fit in a windowsize image
+            points=[[x+self.windowsize/2,y+self.windowsize/2] for x,y in points]
+            print(points)
+            return points
+
+
+        def createTangents(self):
+            """create a list of left and right tangent handles in the format ([x,y],[x,y]) points based with a max value of tan_len"""
+            tangents=[]
+            for i in range(self.Npoints):
+                x=math.sin(i*2*math.pi/self.Npoints)*self.tan_len
+                y=math.cos(i*2*math.pi/self.Npoints)*self.tan_len
+                tangents.append([[-x,-y],[x,y]])
+            return tangents
+
+        def createPoints2DList(self):
+            """create on list of point2D objects"""
+            points=self.createPoints()
+            tangents=self.createTangents()
+            return [point2D(points[i],tangents[i][0],tangents[i][1]) for i in range(self.Npoints)]
+
+        def createShapeGraph(self):
+            """create a shape graph object"""
+            self.shape=ShapeGraph(self.createPoints2DList())
+
+
+
+
+
+
+
 
 if __name__ == '__main__':
-    dataset = SimpleRotoDataset(root='D:/pyG/data/points/')
-    print(len(dataset))
-    print(dataset[1])
+    #dataset = SimpleRotoDataset(root='D:/pyG/data/points/')
+    #print(len(dataset))
+    #print(dataset[1])
+    e=ellipsoid()
+    e.shape.printData()

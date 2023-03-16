@@ -22,17 +22,17 @@ class Model(nn.Module):
 
     def build(self):
         self._build()
-        self.unpool_layers = []
-        self.unpool_layers.append(
-            GraphPooling(tensor_dict=self.tensor_dict, pool_id=1))
-        self.unpool_layers.append(
-            GraphPooling(tensor_dict=self.tensor_dict, pool_id=2))
+        # self.unpool_layers = []
+        # self.unpool_layers.append(
+        #     GraphPooling(tensor_dict=self.tensor_dict, pool_id=1))
+        # self.unpool_layers.append(
+        #     GraphPooling(tensor_dict=self.tensor_dict, pool_id=2))
 
     def forward(self, img_inp):
         reshape = len(img_inp.shape) == 3
         if reshape:
             img_inp = img_inp.unsqueeze(0)
-        inputs = get_features(self.tensor_dict, img_inp)
+        inputs = get_features(self.ellipse, img_inp)
 
 
         img_feat = self.forward_cnn(img_inp)
@@ -74,7 +74,7 @@ class GCN(Model):
 
     def __init__(self, tensor_dict, args):
         super(GCN, self).__init__()
-        self.tensor_dict = tensor_dict
+        self.ellipse = tensor_dict
         self.args = args
         self.build()
 
@@ -87,69 +87,70 @@ class GCN(Model):
             GraphConvolution(input_dim=FLAGS.feat_dim,
                              output_dim=FLAGS.hidden,
                              gcn_block_id=1,
-                             tensor_dict=self.tensor_dict))
+                             ellipsoid=self.ellipse))
 
         for _ in range(12):
             self.layers.append(
                 GraphConvolution(input_dim=FLAGS.hidden,
                                  output_dim=FLAGS.hidden,
                                  gcn_block_id=1,
-                                 tensor_dict=self.tensor_dict))
+                                 ellipsoid=self.ellipse))
         self.layers.append(
             GraphConvolution(input_dim=FLAGS.hidden,
                              output_dim=FLAGS.coord_dim,
                              act=None,
                              gcn_block_id=1,
-                             tensor_dict=self.tensor_dict))
+                             ellipsoid=self.ellipse))
+#Start with 1st block
 
-        # second project block
-        self.layers.append(GraphProjection())
-        self.layers.append(GraphPooling(tensor_dict=self.tensor_dict,
-                                        pool_id=1))  # unpooling
-        self.layers.append(
-            GraphConvolution(input_dim=FLAGS.feat_dim + FLAGS.hidden,
-                             output_dim=FLAGS.hidden,
-                             gcn_block_id=2,
-                             tensor_dict=self.tensor_dict))
-        for _ in range(12):
-            self.layers.append(
-                GraphConvolution(input_dim=FLAGS.hidden,
-                                 output_dim=FLAGS.hidden,
-                                 gcn_block_id=2,
-                                 tensor_dict=self.tensor_dict))
-        self.layers.append(
-            GraphConvolution(input_dim=FLAGS.hidden,
-                             output_dim=FLAGS.coord_dim,
-                             act=None,
-                             gcn_block_id=2,
-                             tensor_dict=self.tensor_dict))
-        # third project block
-        self.layers.append(GraphProjection())
-        self.layers.append(GraphPooling(tensor_dict=self.tensor_dict,
-                                        pool_id=2))  # unpooling
-        self.layers.append(
-            GraphConvolution(input_dim=FLAGS.feat_dim + FLAGS.hidden,
-                             output_dim=FLAGS.hidden,
-                             gcn_block_id=3,
-                             tensor_dict=self.tensor_dict))
-        for _ in range(12):
-            self.layers.append(
-                GraphConvolution(input_dim=FLAGS.hidden,
-                                 output_dim=FLAGS.hidden,
-                                 gcn_block_id=3,
-                                 tensor_dict=self.tensor_dict))
-        self.layers.append(
-            GraphConvolution(input_dim=FLAGS.hidden,
-                             output_dim=int(FLAGS.hidden / 2),
-                             gcn_block_id=3,
-                             tensor_dict=self.tensor_dict))
-        self.layers.append(
-            GraphConvolution(input_dim=int(FLAGS.hidden / 2),
-                             output_dim=FLAGS.coord_dim,
-                             act=None,
-                             gcn_block_id=3,
-                             tensor_dict=self.tensor_dict))
-        self.layers = nn.ModuleList(self.layers)
+        # # second project block
+        # self.layers.append(GraphProjection())
+        # self.layers.append(GraphPooling(tensor_dict=self.ellipse,
+        #                                 pool_id=1))  # unpooling
+        # self.layers.append(
+        #     GraphConvolution(input_dim=FLAGS.feat_dim + FLAGS.hidden,
+        #                      output_dim=FLAGS.hidden,
+        #                      gcn_block_id=2,
+        #                      ellipsoid=self.ellipse))
+        # for _ in range(12):
+        #     self.layers.append(
+        #         GraphConvolution(input_dim=FLAGS.hidden,
+        #                          output_dim=FLAGS.hidden,
+        #                          gcn_block_id=2,
+        #                          ellipsoid=self.ellipse))
+        # self.layers.append(
+        #     GraphConvolution(input_dim=FLAGS.hidden,
+        #                      output_dim=FLAGS.coord_dim,
+        #                      act=None,
+        #                      gcn_block_id=2,
+        #                      ellipsoid=self.ellipse))
+        # # third project block
+        # self.layers.append(GraphProjection())
+        # self.layers.append(GraphPooling(tensor_dict=self.ellipse,
+        #                                 pool_id=2))  # unpooling
+        # self.layers.append(
+        #     GraphConvolution(input_dim=FLAGS.feat_dim + FLAGS.hidden,
+        #                      output_dim=FLAGS.hidden,
+        #                      gcn_block_id=3,
+        #                      ellipsoid=self.ellipse))
+        # for _ in range(12):
+        #     self.layers.append(
+        #         GraphConvolution(input_dim=FLAGS.hidden,
+        #                          output_dim=FLAGS.hidden,
+        #                          gcn_block_id=3,
+        #                          ellipsoid=self.ellipse))
+        # self.layers.append(
+        #     GraphConvolution(input_dim=FLAGS.hidden,
+        #                      output_dim=int(FLAGS.hidden / 2),
+        #                      gcn_block_id=3,
+        #                      ellipsoid=self.ellipse))
+        # self.layers.append(
+        #     GraphConvolution(input_dim=int(FLAGS.hidden / 2),
+        #                      output_dim=FLAGS.coord_dim,
+        #                      act=None,
+        #                      gcn_block_id=3,
+        #                      ellipsoid=self.ellipse))
+        # self.layers = nn.ModuleList(self.layers)
 
         self.proj_layers = []
         for layer in self.layers:
@@ -304,5 +305,6 @@ class GCN(Model):
         x5 = x
 
         img_feat = [x2, x3, x4, x5]
+        print(img_feat[0].shape, img_feat[1].shape, img_feat[2].shape, img_feat[3].shape)
         return img_feat
 
