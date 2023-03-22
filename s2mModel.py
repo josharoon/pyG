@@ -33,7 +33,8 @@ class Model(nn.Module):
         if reshape:
             img_inp = img_inp.unsqueeze(0)
         inputs = get_features(self.ellipse, img_inp)
-
+        #inputs should be 10x2 when we are just interested in xy coordinates
+        inputs=inputs[:,:,:2]
 
         img_feat = self.forward_cnn(img_inp)
 
@@ -57,17 +58,23 @@ class Model(nn.Module):
             activations.append(hidden)
 
         output1 = activations[15]
-        output1_2 = self.unpool_layers[0](output1)
+        # output1_2 = self.unpool_layers[0](output1)
+        #
+        # output2 = activations[31]
+        # output2_2 = self.unpool_layers[1](output2)
+        #
+        # output3 = activations[-1]
 
-        output2 = activations[31]
-        output2_2 = self.unpool_layers[1](output2)
+        # if not reshape:
+        #     return output1, output1_2, output2, output2_2, output3
+        # else:
+        #     return output1.squeeze(0), output1_2.squeeze(0), output2.squeeze(
+        #         0), output2_2.squeeze(0), output3.squeeze(0)
 
-        output3 = activations[-1]
         if not reshape:
-            return output1, output1_2, output2, output2_2, output3
+            return output1
         else:
-            return output1.squeeze(0), output1_2.squeeze(0), output2.squeeze(
-                0), output2_2.squeeze(0), output3.squeeze(0)
+            return output1.squeeze(0)
 
 
 class GCN(Model):
@@ -305,6 +312,6 @@ class GCN(Model):
         x5 = x
 
         img_feat = [x2, x3, x4, x5]
-        print(img_feat[0].shape, img_feat[1].shape, img_feat[2].shape, img_feat[3].shape)
+        #print(img_feat[0].shape, img_feat[1].shape, img_feat[2].shape, img_feat[3].shape)
         return img_feat
 

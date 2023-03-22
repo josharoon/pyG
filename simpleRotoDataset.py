@@ -3,11 +3,16 @@ import math
 
 import torch
 from pathlib import Path
-from torch_geometric.data import Data, Dataset,download_url
+from torch_geometric.data import Data, Dataset, DataLoader
+from torch_geometric.utils import to_networkx
 from torchvision.io import read_image
 from nkShapeGraph import ShapeGraph,point2D
+from p2mUtils.utils import *
 #from ImageGraph import ImageGraph
 import json
+
+
+
 
 class SimpleRotoDataset(Dataset):
     """A simple dataset for testing and training rotoscoping models."""
@@ -45,17 +50,37 @@ class SimpleRotoDataset(Dataset):
 
     def process(self):
         """process the data"""
+        # if processed files already exist then return
+        if self.processed_file_exists():
+            return
+
 
         self.labels = Path(self.root).joinpath('points.json')
         self.labelsDict = self.loadLabelsJson()
-        for i in range(1,len(self)):
-            image,label=self.get(i)
+        for i in range(1,len(self)+1):
+            image,label=self.get(i-1)
             #convert label to a graph
             labelGraph=ShapeGraph(self.getPoints2DList(label))
             #create a data object
             data = Data(x=labelGraph.x, edge_index=labelGraph.edge_index,y=image)
             #save the data object
             torch.save(data, self.processed_paths[i-1])
+
+    def processed_file_exists(self):
+        # get list of all processed file names
+        processed_file_names = self.processed_file_names
+        # check if any are missing
+
+        for file_name in processed_file_names:
+            processed_path=Path(self.processed_dir).joinpath(file_name)
+            if processed_path.exists():
+                continue
+            else:
+                # delete any files in processed directory
+                for file in Path(self.processed_dir).iterdir():
+                    file.unlink()
+                return False
+        return True
 
 
 
@@ -86,24 +111,40 @@ class SimpleRotoDataset(Dataset):
         """get the data from the .pt files in the processed directory if file exists otherwise get the data from the raw directory"""
         if  Path(self.processed_dir).joinpath(self.processed_file_names[idx]).exists():
             data = torch.load(self.processed_paths[idx])
-            return data.x, data.y
+            #print(f"loaded {self.processed_paths[idx]}")
+            return data.y, data.x , self.processed_paths[idx]
         else:
             #get the image
             image=read_image(self.raw_paths[idx])
             #get the label
-            label=self.labelsDict[str(idx)]
+            label=self.labelsDict[str(idx+1)]
             return image,label
+
+    def __iter__(self):
+        self.n = 0
+        return self
+
+    def __next__(self):
+        if self.n < len(self):
+            result = self.get(self.n)
+            self.n += 1
+            return result
+        else:
+            raise StopIteration
+
+
 
 
 class ellipsoid():
         """return an ellipse shape of Npoints"""
         def __init__(self):
-            self.Npoints=10
+            self.Npoints=5
             self.max_x=100
             self.max_y=100
             self.tan_len=10
             self.windowsize=224
             self.createShapeGraph()
+            self.getChebPolys()
         def createPoints(self):
             """given a set number of points create a set of x,y points on an ellipse shape"""
             points=[]
@@ -136,6 +177,12 @@ class ellipsoid():
             """create a shape graph object"""
             self.shape=ShapeGraph(self.createPoints2DList())
 
+        def getChebPolys(self):
+            """return the chebyshev polynomials for the shape"""
+            netxData = to_networkx(self.shape.data, to_undirected=True)
+            adj = nx.adjacency_matrix(netxData)
+            self.cheb = chebyshev_polynomials(adj, 1)
+
 
 
 
@@ -144,8 +191,8 @@ class ellipsoid():
 
 
 if __name__ == '__main__':
-    #dataset = SimpleRotoDataset(root='D:/pyG/data/points/')
-    #print(len(dataset))
-    #print(dataset[1])
+#    dataset = SimpleRotoDataset(root='D:/pyG/data/points/')
+#   print(len(dataset))
+#    print(dataset[198])
     e=ellipsoid()
     e.shape.printData()

@@ -1,6 +1,7 @@
 from __future__ import division
 import torch
 import torch.nn as nn
+from p2mUtils.utils import create_sparse_tensor
 from torch.nn import functional as F
 import numpy as np
 
@@ -11,7 +12,7 @@ def project(img_feat, x, y, dim):
     ####### MAY BE WRONG
     #### TO CHECK
     img_size = img_feat.shape[-1]
-
+    #print(f"doing project with img_size: {img_size}")
     x = torch.clamp(x, min=0, max=img_size - 1)
     y = torch.clamp(y, min=0, max=img_size - 1)
 
@@ -52,7 +53,7 @@ def dot(x, y, sparse=False):
     if sparse:
         #print('sparse', x.shape, y.shape)
         #res = torch.sparse.mm(x, y)
-        res = torch.matmul(x.to_dense().cuda(), y.cuda())
+        res = torch.matmul(x.to_dense(), y)
     else:
         #print('dense', x.shape, y.shape)
         res = torch.matmul(x, y)
@@ -75,7 +76,8 @@ class GraphConvolution(nn.Module):
 
         self.act = act
         if gcn_block_id == 1:
-            self.support = ellipsoid
+            self.support = [create_sparse_tensor(info) for info in ellipsoid.cheb]
+
         elif gcn_block_id == 2:
             self.support = ellipsoid
         elif gcn_block_id == 3:
@@ -84,7 +86,7 @@ class GraphConvolution(nn.Module):
         self.featureless = featureless
         self.bias = bias
         self.vars = nn.ParameterDict()
-        for i in range(len(self.support.shape.data)):
+        for i in range(len(self.support)):
             self.vars['weights_' + str(i)] = glorot([input_dim, output_dim])
         if self.bias:
             self.vars['bias'] = zeros([output_dim])
@@ -94,18 +96,24 @@ class GraphConvolution(nn.Module):
 
         # convolve
         supports = list()
-        for i in range(len(self.support.shape.data.x)):
+        for i in range(len(self.support)):
             if not self.featureless:
-                pre_sup = dot(x, self.vars['weights_' + str(i)].cuda(), sparse=False)
+                if x.is_cuda:
+                    pre_sup = dot(x, self.vars['weights_' + str(i)].cuda(), sparse=False)
+                else:
+                    pre_sup = dot(x, self.vars['weights_' + str(i)], sparse=False)
             else:
-                pre_sup = self.vars['weights_' + str(i)].cuda()
-            support = dot(self.support.shape.data.x[i], pre_sup, sparse=True)
+                pre_sup = self.vars['weights_' + str(i)]
+            support = dot(self.support[i], pre_sup, sparse=True) #hacked to get xy coordinates
             supports.append(support)
         output = sum(supports)
 
         # bias
         if self.bias:
-            output += self.vars['bias']
+            if output.is_cuda:
+                output += self.vars['bias'].cuda()
+            else:
+                output += self.vars['bias']
 
         if self.act is not None:
             output = self.act(output)
@@ -143,10 +151,10 @@ class GraphProjection(nn.Module):
         for idx, input_solo in enumerate(inputs):
             img_feat = [feats[idx] for feats in self.img_feat]
             #output = self.forward_solo(inputs[0], img_feat)
-            inputs=inputs[0][:,:2] #we just grab xy coordinates
+            inputs=inputs[0] #we just grab xy coordinates
             #then we just add for the z coordinate
             #inputs = torch.cat((inputs, torch.ones(inputs.shape[0],1)), dim=1)
-            inputs=inputs.cuda() # temporary hack to bring on to gpu
+            #inputs=inputs.cuda() # temporary hack to bring on to gpu
             output = self.forward_solo(inputs, img_feat)
             outputs.append(output)
         outputs = torch.stack(outputs, 0)
@@ -168,8 +176,8 @@ class GraphProjection(nn.Module):
         #
         # x = h / (224.0 / 56)
         # y = w / (224.0 / 56)
-        x=X
-        y=Y
+        x=X / (224.0 / 56)
+        y=Y / (224.0 / 56)
         out1 = project(img_feat_solo[0], x, y, 64)
 
         x = X / (224.0 / 28)

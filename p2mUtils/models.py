@@ -46,12 +46,14 @@ class Trainer:
         if batch:
             loss = 0
             for idx, (input, label) in enumerate(zip(inputs, labels)):
-                output = [out[idx] for out in outputs]
+                #output = [out[idx] for out in outputs]
+                output=[outputs] #we only have one output at the moment
                 loss += self._get_loss(input, output, label)
             loss /= len(inputs)
         else:
             loss = self._get_loss(inputs, outputs, labels)
-        return loss, outputs[0], outputs[2], outputs[4]
+        #return loss, outputs[0], outputs[2], outputs[4]
+        return loss, outputs[0]
 
     def _get_loss_tf(self, inputs, outputs, labels):
         #output1, output1_2, output2, output2_2, output3 = outputs
@@ -148,27 +150,37 @@ class Trainer:
         pt_edge_loss = 0.
         pt_lap_loss = 0.
         lap_const = [0.2, 1., 1.]
-        for idx, (output, feat) in enumerate(
-                zip([outputs[0], outputs[2], outputs[4]],
-                    [inputs, outputs[1], outputs[3]])):
-            dist1, dist2, _, _ = chamfer_dist(output, labels[:, :3])
-            pt_chamfer_loss += torch.mean(dist1) + torch.mean(dist2)
-            pt_edge_loss += edge_loss_pt(output, labels, self.tensor_dict,
-                                         idx + 1)
-            pt_lap_loss += lap_const[idx] * laplace_loss(
-                feat, output, self.tensor_dict, idx + 1)
+        # for idx, (output, feat) in enumerate(
+        #         zip([outputs[0], outputs[2], outputs[4]],
+        #             [inputs, outputs[1], outputs[3]])):
 
-        loss = 100 * pt_chamfer_loss + 0.1 * pt_edge_loss + 0.3 * pt_lap_loss
+        #for idx, (output, feat) in enumerate(outputs,inputs):
+
+        output=outputs[0][0]
+        dist1, dist2, _, _ = chamfer_dist(output, labels[:, :2])
+        pt_chamfer_loss += torch.mean(dist1) + torch.mean(dist2)
+            # pt_edge_loss += edge_loss_pt(output, labels, self.tensor_dict,
+            #                              idx + 1)
+            # pt_lap_loss += lap_const[idx] * laplace_loss(
+            #     feat, output, self.tensor_dict, idx + 1)
+
+        #loss = 100 * pt_chamfer_loss + 0.1 * pt_edge_loss + 0.3 * pt_lap_loss
+        loss = 100 * pt_chamfer_loss #  start with only chamfer loss
         return loss
 
     def optimizer_step(self, images, labels):
         self.optimizer.zero_grad()
-        loss, output1, output2, output3 = self.get_loss(images, labels)
+        #loss, output1, output2, output3 = self.get_loss(images, labels)
+        loss, output1 = self.get_loss(images, labels)
         loss.backward()
         self.optimizer.step()
+        # if not use_cuda:
+        #     return loss.item(), output1.detach().numpy(), output2.detach(
+        #     ).numpy(), output3.detach().numpy()
+        # else:
+        #     return loss.item(), output1.detach().cpu().numpy(), output2.detach(
+        #     ).cpu().numpy(), output3.detach().cpu().numpy()
         if not use_cuda:
-            return loss.item(), output1.detach().numpy(), output2.detach(
-            ).numpy(), output3.detach().numpy()
+            return loss.item(), output1.detach().numpy()
         else:
-            return loss.item(), output1.detach().cpu().numpy(), output2.detach(
-            ).cpu().numpy(), output3.detach().cpu().numpy()
+            return loss.item(), output1.detach().cpu().numpy()
