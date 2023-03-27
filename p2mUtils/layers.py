@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 from p2mUtils.utils import create_sparse_tensor
 from torch.nn import functional as F
+from p2mUtils.viz import plot_to_tensorboard
 import numpy as np
 
 from .inits import *
@@ -15,6 +16,9 @@ def project(img_feat, x, y, dim):
     #print(f"doing project with img_size: {img_size}")
     x = torch.clamp(x, min=0, max=img_size - 1)
     y = torch.clamp(y, min=0, max=img_size - 1)
+
+    #plot xy to tensorboard
+    #plot_to_tensorboard(x, y, 'x)
 
     ### REASON FOR 7 without clamping is ERROR for GRAPHPROJECTION
     ### UNTIL HERE
@@ -123,10 +127,10 @@ class GraphConvolution(nn.Module):
 class GraphPooling(nn.Module):
     """Graph Pooling layer pools to higher dimension geometry."""
 
-    def __init__(self, tensor_dict, pool_id=1):
+    def __init__(self, ellipse, pool_id=1):
         super(GraphPooling, self).__init__()
         self.layer_type = 'GraphPooling'
-        self.pool_idx = tensor_dict['pool_idx'][pool_id - 1]
+        self.pool_idx = ellipse['pool_idx'][pool_id - 1]
 
     def forward(self, inputs):
         X = inputs.clone()
@@ -150,12 +154,7 @@ class GraphProjection(nn.Module):
         #print('inputs', inputs.shape)
         for idx, input_solo in enumerate(inputs):
             img_feat = [feats[idx] for feats in self.img_feat]
-            #output = self.forward_solo(inputs[0], img_feat)
-            inputs=inputs[0] #we just grab xy coordinates
-            #then we just add for the z coordinate
-            #inputs = torch.cat((inputs, torch.ones(inputs.shape[0],1)), dim=1)
-            #inputs=inputs.cuda() # temporary hack to bring on to gpu
-            output = self.forward_solo(inputs, img_feat)
+            output = self.forward_solo(inputs[0], img_feat)
             outputs.append(output)
         outputs = torch.stack(outputs, 0)
         return outputs

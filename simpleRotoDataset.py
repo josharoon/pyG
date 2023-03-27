@@ -6,8 +6,10 @@ from pathlib import Path
 from torch_geometric.data import Data, Dataset, DataLoader
 from torch_geometric.utils import to_networkx
 from torchvision.io import read_image
+from torchvision.transforms import ToPILImage
 from nkShapeGraph import ShapeGraph,point2D
 from p2mUtils.utils import *
+import matplotlib.pyplot as plt
 #from ImageGraph import ImageGraph
 import json
 
@@ -137,14 +139,43 @@ class SimpleRotoDataset(Dataset):
 
 class ellipsoid():
         """return an ellipse shape of Npoints"""
-        def __init__(self):
-            self.Npoints=5
+        def __init__(self, npoints=5):
+            self.Npoints= npoints
             self.max_x=100
             self.max_y=100
             self.tan_len=10
             self.windowsize=224
+            self.shape=None
             self.createShapeGraph()
             self.getChebPolys()
+            self.getVertexNeighbours()
+            self.lapIndex=torch.as_tensor(cal_lap_index(self.vertexNeighbours))
+
+        def getVertexNeighbours(self):
+            """get the neighbours of each vertex and return asa list of lists"""
+            #iterate through edge index to get the neighbours of each vertex
+            neighbours=[]
+            for p in range(self.Npoints):
+                if p==0:
+                    before=self.shape.edges[-1][0]
+                else:
+                    before=self.shape.edges[p-1][0]
+                if p==self.Npoints-1:
+                    after=self.shape.edges[0][0]
+                else:
+                    after=self.shape.edges[p+1][0]
+                neighbours.append([before,after])
+            self.vertexNeighbours=neighbours
+            print(self.vertexNeighbours)
+
+
+
+
+
+
+
+
+
         def createPoints(self):
             """given a set number of points create a set of x,y points on an ellipse shape"""
             points=[]
@@ -184,6 +215,19 @@ class ellipsoid():
             self.cheb = chebyshev_polynomials(adj, 1)
 
 
+        def plotPoints(self):
+                """plot the points of the  elllipse using matplotlib in a 224 x 224 grid with their index number"""
+                points=self.shape.x
+                plt.figure(figsize=(10,10))
+                plt.xlim(0,224)
+                plt.ylim(0,224)
+                plt.scatter(points[:,0],points[:,1])
+                for i in range(self.Npoints):
+                    plt.text(points[i,0],points[i,1],str(i))
+                plt.show()
+
+
+
 
 
 
@@ -191,8 +235,22 @@ class ellipsoid():
 
 
 if __name__ == '__main__':
-#    dataset = SimpleRotoDataset(root='D:/pyG/data/points/')
-#   print(len(dataset))
-#    print(dataset[198])
-    e=ellipsoid()
-    e.shape.printData()
+    dataset = SimpleRotoDataset(root='D:/pyG/data/points/')
+    print(len(dataset))
+    print(dataset[198])
+    dataloader=DataLoader(dataset, batch_size=1, shuffle=True)
+    dataIter=iter(dataloader)
+    data=next(dataIter)
+    print(data)
+    image=ToPILImage()(data[0][0])
+    image.show()
+
+
+
+
+
+#     e=ellipsoid()
+#     e.shape.printData()
+#     e.plotPoints()
+#     e.getVertexNeighbours()
+#     print(e.lapIndex)

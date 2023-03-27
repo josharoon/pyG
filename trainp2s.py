@@ -1,6 +1,7 @@
 import torch
 from p2mUtils.models import Trainer
 from p2mUtils.utils import process_output
+from p2mUtils.viz import plot_to_tensorboard , image_to_tensorboard
 from pytorch_lightning.utilities import argparse
 from s2mModel import GCN
 from torch_geometric.data import Data
@@ -12,7 +13,10 @@ from torch.utils.data import random_split
 import os
 import numpy as np
 import pickle
+from torch.utils.tensorboard import SummaryWriter
+from torchvision.transforms import transforms, ToPILImage
 
+writer = SummaryWriter()
 use_cuda = torch.cuda.is_available()
 args = argparse.ArgumentParser()
 args.add_argument('--training_data',
@@ -47,7 +51,7 @@ args.add_argument('--weight_decay',
 args.add_argument('--epochs',
                   help='Number of epochs to train.',
                   type=int,
-                  default=20)
+                  default=200)
 args.add_argument('--cnn_type',
                   help='Type of Neural Network',
                   type=str,
@@ -64,7 +68,7 @@ args.add_argument('--info_ellipsoid',
 args.add_argument('--hidden',
                   help='Number of units in  hidden layer.',
                   type=int,
-                  default=256)
+                  default=2048)
 args.add_argument('--feat_dim',
                   help='Number of units in perceptual feature layer.',
                   type=int,
@@ -87,16 +91,15 @@ mydir = os.path.join(os.getcwd(), 'temp', FLAGS.cnn_type,
                      datetime.now().strftime('%m-%d_%H-%M-%S'))
 os.makedirs(mydir)
 dataset=simpleRotoDataset.SimpleRotoDataset(root='D:/pyG/data/points/')
-train_data, test_data = random_split(dataset, [0.9, 0.1])
-data_loader=DataLoader(train_data,batch_size=1,shuffle=False)
+train_data, test_data = random_split(dataset, [0.95, 0.05])
+data_loader=DataLoader(train_data,batch_size=FLAGS.batch_size,shuffle=False)
 test_loader=DataLoader(test_data,batch_size=1,shuffle=False)
-
 
 ellipse=ellipsoid()
 if use_cuda:
     ellipse.shape.x = ellipse.shape.x.cuda()
     ellipse.shape.data=ellipse.shape.data.cuda()
-model=GCN(ellipse,FLAGS)
+model=GCN(ellipse,FLAGS,writer)
 # if use_cuda:
 #     model.load_state_dict(torch.load(FLAGS.checkpoint), strict=False)
 #     model = model.cuda()
@@ -106,7 +109,7 @@ model=GCN(ellipse,FLAGS)
 #     print(f"Model loaded on CPU from {FLAGS.checkpoint}")
 
 
-trainer = Trainer(ellipse, model, FLAGS)
+trainer = Trainer(ellipse, model, FLAGS,writer)
 if use_cuda:
     model = model.cuda()
 train_number = len(train_data)
@@ -123,9 +126,10 @@ for epoch in range(FLAGS.epochs):
     os.makedirs(epoch_dir)
     os.makedirs(epoch_dir + '/outputs')
     print('-------- Folder created : {}'.format(epoch_dir))
-    all_loss = np.zeros(int(train_number / FLAGS.batch_size), dtype='float32')
+    iterNum = int(train_number / FLAGS.batch_size)
+    all_loss = np.zeros(iterNum, dtype='float32')
     print('-------- Training epoch {} ...'.format(epoch + 1))
-    for iters in range(int(train_number / FLAGS.batch_size)):
+    for iters in range(iterNum):
         start_iter = datetime.now()
         torch.cuda.empty_cache()
         image,spline, path=next(data_iter)
@@ -134,9 +138,28 @@ for epoch in range(FLAGS.epochs):
             image=image.cuda()
             spline=spline.cuda()
         #dists,out1,out2,out3=trainer.optimizer_step(image,spline)
+
+        #write input image and plot spline to tensorboard
+        #create PIL image from tensor and show
+
+
+        image_to_tensorboard(writer, (epoch*iterNum)+iters,image[0],"input_image")
+        plot_to_tensorboard(writer, (epoch*iterNum)+iters,spline.cpu().numpy()[0][:,:2],"input_spline")
+
+
+
         dists,out1=trainer.optimizer_step(image,spline)
         all_loss[iters] = dists
         mean_loss = np.mean(all_loss[np.where(all_loss)])
+
+        #write losses to tensorboard
+        writer.add_scalar('Loss/train', dists, (epoch*iterNum)+iters)
+        #plot output to tensorboard
+        plot_to_tensorboard(writer, (epoch*iterNum)+iters,out1)
+        #write network graph
+        # if iters==0 and epoch==0:
+        #     writer.add_graph(model, input_to_model=(ellipse) , verbose=False)
+
         end_iter = datetime.now()
         if iters == 0:
             total_iter = end_iter - start_iter
@@ -150,7 +173,8 @@ for epoch in range(FLAGS.epochs):
             print("Time for iterations :", datetime.now() - timer)
             timer = datetime.now()
             print("Global time :", timer - starter)
-
+    #write loss at epoch end
+    writer.add_scalar('Loss/train_epoch', mean_loss, epoch)
     print('-------- Training epoch {} done !'.format(epoch + 1))
     print("Time for epoch :", timer - start_epoch)
     print("Global time :", timer - starter)
@@ -169,6 +193,8 @@ for epoch in range(FLAGS.epochs):
             image = image.cuda()
             spline = spline.cuda()
         output3 = model(image)
+
+
         shape = process_output(output3)
         pred_path = epoch_dir + '/outputs/'
         #save list of point2D objects to file pickle format

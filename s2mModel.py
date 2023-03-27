@@ -4,7 +4,7 @@ import torch.nn as nn
 from p2mUtils.inits import *
 from p2mUtils.layers import *
 from p2mUtils.utils import *
-
+from p2mUtils.viz import *
 
 class Model(nn.Module):
 
@@ -29,6 +29,10 @@ class Model(nn.Module):
         #     GraphPooling(tensor_dict=self.tensor_dict, pool_id=2))
 
     def forward(self, img_inp):
+        #write image 2 tensorboard
+        image_to_tensorboard(self.writer,0,img_inp[0],name="model_input")
+
+
         reshape = len(img_inp.shape) == 3
         if reshape:
             img_inp = img_inp.unsqueeze(0)
@@ -37,6 +41,14 @@ class Model(nn.Module):
         inputs=inputs[:,:,:2]
 
         img_feat = self.forward_cnn(img_inp)
+        featMaps=[]
+        for f in img_feat:
+            f=f[0]
+            # sum over all channels
+            f=f.sum(0)
+            featMaps.append(f)
+        for f in featMaps:
+             image_to_tensorboard(self.writer,0,f,name=f"feature_map_{(f.shape[0])}x{(f.shape[1])}")
 
         self._prepare(img_feat)
 
@@ -79,11 +91,12 @@ class Model(nn.Module):
 
 class GCN(Model):
 
-    def __init__(self, tensor_dict, args):
+    def __init__(self, ellipse, args,writer=None):
         super(GCN, self).__init__()
-        self.ellipse = tensor_dict
+        self.ellipse = ellipse
         self.args = args
         self.build()
+        self.writer=writer
 
     def _build(self):
         FLAGS = self.args
