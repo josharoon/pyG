@@ -18,7 +18,8 @@ import json
 
 class SimpleRotoDataset(Dataset):
     """A simple dataset for testing and training rotoscoping models."""
-    def __init__(self, root, transform=None, pre_transform=None,pre_filter=None):
+    def  __init__(self, root,labelsJson, transform=None, pre_transform=None,pre_filter=None):
+        self.labelsFile=labelsJson
         super().__init__(root, transform, pre_transform,pre_filter)
         self.root=root
 
@@ -57,7 +58,7 @@ class SimpleRotoDataset(Dataset):
             return
 
 
-        self.labels = Path(self.root).joinpath('points.json')
+        self.labels = Path(self.root).joinpath(self.labelsFile)
         self.labelsDict = self.loadLabelsJson()
         for i in range(1,len(self)+1):
             image,label=self.get(i-1)
@@ -235,7 +236,7 @@ class ellipsoid():
 
 
 if __name__ == '__main__':
-    dataset = SimpleRotoDataset(root='D:/pyG/data/points/')
+    dataset = SimpleRotoDataset(root='D:/pyG/data/points/',labelsJson="points310323_205433.json")
     print(len(dataset))
     print(dataset[198])
     dataloader=DataLoader(dataset, batch_size=1, shuffle=True)

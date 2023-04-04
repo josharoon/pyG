@@ -43,7 +43,7 @@ args.add_argument('--learning_rate_every',
 args.add_argument('--show_every',
                   help='Frequency of displaying loss',
                   type=int,
-                  default=10)
+                  default=1)
 args.add_argument('--weight_decay',
                   help='Weight decay for L2 loss.',
                   type=float,
@@ -59,7 +59,7 @@ args.add_argument('--cnn_type',
 args.add_argument('--checkpoint',
                   help='Checkpoint to use.',
                   type=str,
-                  default='temp/RES/03-21_18-28-31/epoch_20/last_checkpoint.pt'
+                  default=r'D:\pyG\temp\RES\04-04_11-59-08\epoch_3\last_checkpoint.pt'
                   )  # rechanged #changed
 args.add_argument('--info_ellipsoid',
                   help='Initial Ellipsoid info',
@@ -76,7 +76,7 @@ args.add_argument('--feat_dim',
 args.add_argument('--coord_dim',
                   help='Number of units in output layer.',
                   type=int,
-                  default=2)
+                  default=6)
 
 FLAGS = args.parse_args()
 
@@ -90,23 +90,23 @@ FLAGS = args.parse_args()
 mydir = os.path.join(os.getcwd(), 'temp', FLAGS.cnn_type,
                      datetime.now().strftime('%m-%d_%H-%M-%S'))
 os.makedirs(mydir)
-dataset=simpleRotoDataset.SimpleRotoDataset(root='D:/pyG/data/points/')
+dataset=simpleRotoDataset.SimpleRotoDataset(root='D:/pyG/data/points/',labelsJson="points310323_205433.json")
 train_data, test_data = random_split(dataset, [0.95, 0.05])
 data_loader=DataLoader(train_data,batch_size=FLAGS.batch_size,shuffle=False)
 test_loader=DataLoader(test_data,batch_size=1,shuffle=False)
 
-ellipse=ellipsoid()
+ellipse=ellipsoid(npoints=5)
 if use_cuda:
     ellipse.shape.x = ellipse.shape.x.cuda()
     ellipse.shape.data=ellipse.shape.data.cuda()
 model=GCN(ellipse,FLAGS,writer)
-# if use_cuda:
-#     model.load_state_dict(torch.load(FLAGS.checkpoint), strict=False)
-#     model = model.cuda()
-#     print(f"Model loaded on GPU {torch.cuda.get_device_name(0)} from {FLAGS.checkpoint}")
-# else:
-#     model.load_state_dict(torch.load(FLAGS.checkpoint, map_location='cpu'), strict=False)
-#     print(f"Model loaded on CPU from {FLAGS.checkpoint}")
+if use_cuda:
+    model.load_state_dict(torch.load(FLAGS.checkpoint), strict=False)
+    model = model.cuda()
+    print(f"Model loaded on GPU {torch.cuda.get_device_name(0)} from {FLAGS.checkpoint}")
+else:
+    model.load_state_dict(torch.load(FLAGS.checkpoint, map_location='cpu'), strict=False)
+    print(f"Model loaded on CPU from {FLAGS.checkpoint}")
 
 
 trainer = Trainer(ellipse, model, FLAGS,writer)
@@ -127,12 +127,18 @@ for epoch in range(FLAGS.epochs):
     os.makedirs(epoch_dir + '/outputs')
     print('-------- Folder created : {}'.format(epoch_dir))
     iterNum = int(train_number / FLAGS.batch_size)
-    all_loss = np.zeros(iterNum, dtype='float32')
+    all_loss = np.zeros((iterNum,3), dtype='float32')
+    all_loss_test = np.zeros((train_number,3), dtype='float32')
     print('-------- Training epoch {} ...'.format(epoch + 1))
     for iters in range(iterNum):
         start_iter = datetime.now()
         torch.cuda.empty_cache()
         image,spline, path=next(data_iter)
+        #make shapes match in the case where ellipse has more points than spline
+        if spline.shape[1]!=ellipse.Npoints:
+            #append zeros to spline to make it 20 points
+            spline=torch.cat((spline,torch.zeros((spline.shape[0],ellipse.Npoints-spline.shape[1],spline.shape[2]))),dim=1)
+
         image=image.float()
         if use_cuda:
             image=image.cuda()
@@ -142,24 +148,29 @@ for epoch in range(FLAGS.epochs):
         #write input image and plot spline to tensorboard
         #create PIL image from tensor and show
 
-
-        image_to_tensorboard(writer, (epoch*iterNum)+iters,image[0],"input_image")
-        plot_to_tensorboard(writer, (epoch*iterNum)+iters,spline.cpu().numpy()[0][:,:2],"input_spline")
+        global_iters = (epoch * iterNum) + iters
+        image_to_tensorboard(writer, global_iters, image[0], "input_image")
+        plot_to_tensorboard(writer, global_iters, spline.cpu().numpy()[0][:, :2], "input_spline")
 
 
 
         dists,out1=trainer.optimizer_step(image,spline)
         all_loss[iters] = dists
-        mean_loss = np.mean(all_loss[np.where(all_loss)])
+        mean_loss = np.mean(all_loss[:,0][np.where(all_loss[:,0])])
+        mean_loss_point = np.mean(all_loss[:,1][np.where(all_loss[:,1])])
+        mean_loss_tangent = np.mean(all_loss[:,2][np.where(all_loss[:,2])])
+
 
         #write losses to tensorboard
-        writer.add_scalar('Loss/train', dists, (epoch*iterNum)+iters)
+        writer.add_scalar('Loss/train', dists[0], global_iters)
+        writer.add_scalar('Loss/train_point', dists[1], global_iters)
+        writer.add_scalar('Loss/train_tangent', dists[2], global_iters)
         #plot output to tensorboard
-        plot_to_tensorboard(writer, (epoch*iterNum)+iters,out1)
+        plot_to_tensorboard(writer, global_iters, out1)
         #write network graph
         # if iters==0 and epoch==0:
         #     writer.add_graph(model, input_to_model=(ellipse) , verbose=False)
-
+        trainer.global_step=global_iters
         end_iter = datetime.now()
         if iters == 0:
             total_iter = end_iter - start_iter
@@ -168,7 +179,7 @@ for epoch in range(FLAGS.epochs):
         if (iters + 1) % FLAGS.show_every == 0:
             print(
                 '------------ Iteration = {}, mean loss = {:.2f}, iter loss = {:.2f}'
-                .format(iters + 1, mean_loss, dists))
+                .format(iters + 1, mean_loss, dists[0]))
 
             print("Time for iterations :", datetime.now() - timer)
             timer = datetime.now()
@@ -193,9 +204,34 @@ for epoch in range(FLAGS.epochs):
             image = image.cuda()
             spline = spline.cuda()
         output3 = model(image)
-
-
         shape = process_output(output3)
+        #calculate loss
+        # if batch feed in 1 spline/output at a time
+        batch=False
+        batchSize=1
+        if len(output3.shape) == 3:
+            batch=True
+            batchSize=output3.shape[0]
+            output3=output3.view(output3.shape[0] * output3.shape[1], -1)
+            spline=spline.view(spline.shape[0] * spline.shape[1], -1)
+        #spline=spline.unsqueeze_(1)
+        output3=[output3[None]]
+        dists = trainer._get_loss_pt(spline, output3,spline,6)
+
+        all_loss_test[i] = [dists[0].item(), dists[1].item(), dists[2].item()]
+        #divide by batch size
+        if batch:
+            all_loss_test[i]=all_loss_test[i]/batchSize
+
+        mean_loss_test = np.mean(all_loss_test[:, 0][np.where(all_loss_test[:, 0])])
+        mean_loss_point_test = np.mean(all_loss_test[:, 1][np.where(all_loss_test[:, 1])])
+        mean_loss_tangent_test = np.mean(all_loss_test[:, 2][np.where(all_loss_test[:, 2])])
+
+
+
+
+
+
         pred_path = epoch_dir + '/outputs/'
         #save list of point2D objects to file pickle format
         try:
@@ -204,6 +240,16 @@ for epoch in range(FLAGS.epochs):
         except Exception as ex:
             print("Error during pickling object (Possibly unsupported):", ex)
 
+
     print('-------- Testing epoch {} done !'.format(epoch + 1))
+    # write the loss,point loss and tangent loss to tensorboard
+    writer.add_scalar('Loss/test', mean_loss_test, epoch)
+    writer.add_scalar('Loss/test_point', mean_loss_point_test, epoch)
+    writer.add_scalar('Loss/test_tangent', mean_loss_tangent_test, epoch)
+    print("Mean loss test:", mean_loss_test)
+    print("Mean loss point test:", mean_loss_point_test)
+    print("Mean loss tangent test:", mean_loss_tangent_test)
+
+    print("")
     print('\n')
 
