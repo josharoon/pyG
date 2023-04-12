@@ -1,9 +1,12 @@
-import torch
 import torch.optim as optim
-from torch_geometric.utils import get_laplacian
+from p2mUtils.miouSpline import splineArray2Image
+from torch import nn
+from torchvision.transforms import PILToTensor
+
 from .losses import *
 from .utils import *
 from .chamfer import nn_distance_function as chamfer_dist
+from torchmetrics.classification import dice
 use_cuda = torch.cuda.is_available()
 
 
@@ -20,6 +23,10 @@ class Trainer:
         self.ellipse = ellipse
         self._get_loss = self._get_loss_pt
         self.ncoords=args.coord_dim
+        self.tanWeight=args.tan_weight
+        self.pointWeight=args.point_weight
+        self.chamferWeight=args.chamfer_weight
+        self.diceWeight=args.dice_weight
         self.writer=writer
 
     # def get_loss(self, img_inp, labels):
@@ -49,24 +56,32 @@ class Trainer:
             inputs = get_features(self.ellipse, img_inp[0]) #return data from ellipse
             outputs = self.network(img_inp[0], img_inp[1])
         if batch:
-            loss = 0
-            loss1 = 0
-            loss2 = 0
+            losses=[0,0,0,0]
             for idx, (input, label) in enumerate(zip(inputs, labels)):
                 #output = [out[idx] for out in outputs]
+
                 output=[outputs] #we only have one output at the moment
-                loss += self._get_loss(input, output, label,ncoords)[0]
-                loss1 += self._get_loss(input, output, label,ncoords)[1]
-                loss2 += self._get_loss(input, output, label,ncoords)[2]
-            loss /= len(inputs)
-            loss1 /= len(inputs)
-            loss2 /= len(inputs)
+                itLosses=self._get_loss(input, output, label,ncoords)
+                losses[0]+=itLosses[0]
+                losses[1]+=itLosses[1]
+                losses[2]+=itLosses[2]
+                losses[3]+=itLosses[3]
+
+            losses[0]/=len(inputs)
+            losses[1]/=len(inputs)
+            losses[2]/=len(inputs)
+            losses[3]/=len(inputs)
+
+            # loss /= len(inputs)
+            # loss1 /= len(inputs)
+            # loss2 /= len(inputs)
         else:
-            loss = self._get_loss(inputs, outputs, labels,ncoords)
-            loss1 = self._get_loss(inputs, outputs, labels,ncoords)[1]
-            loss2 = self._get_loss(inputs, outputs, labels,ncoords)[2]
+            losses = self._get_loss(inputs, outputs, labels, ncoords)
+            # loss = self._get_loss(inputs, outputs, labels,ncoords)
+            # loss1 = self._get_loss(inputs, outputs, labels,ncoords)[1]
+            # loss2 = self._get_loss(inputs, outputs, labels,ncoords)[2]
         #return loss, outputs[0], outputs[2], outputs[4]
-        return [loss,loss1,loss2], outputs[0]
+        return [losses[0],losses[1],losses[2],losses[3]], outputs[0]
 
     def _get_loss_tf(self, inputs, outputs, labels):
         #output1, output1_2, output2, output2_2, output3 = outputs
@@ -187,9 +202,10 @@ class Trainer:
         pt_chamfer_loss = 0.
         pt_edge_loss = 0.
         pt_lap_loss = 0.
-        pt_match_loss = 0.
+        blended_loss = 0.
         point_loss = 0.
         tangent_loss = 0.
+        diceLossVal = 0.
         lap_const = [0.2, 1., 1.]
         idx=0 #we only have block 1 at the moment
         # for idx, (output, feat) in enumerate(
@@ -199,23 +215,49 @@ class Trainer:
         #for idx, (output, feat) in enumerate(outputs,inputs):
 
         output=outputs[0][0]
-        feat=inputs[:,:2]
-        #dist1, dist2, _, _ = chamfer_dist(output, labels[:, :nCoords])
-        #pt_chamfer_loss += torch.mean(dist1) + torch.mean(dist2)
+        # #resize output to 3x224x224
+        # output=output.resize(3,224,224)
+        #
+        # feat=inputs[:,:2]
+        # outImage=splineArray2Image(output)
+        # #keep gradeint for dice loss
+        # #convert out to float
+        # outImage=outImage.float()
+        #
+        # labelImage=splineArray2Image(labels)
+        # #convert label to float
+        # labelImage=labelImage.float()
+        # #now resize output to 3x224x224
+        #
+        #
+        #
+        #
+        # #diceC = dice.Dice()
+        # #calculate dice  loss between the 2 images
+        # #diceLossVal += diceC(outImage,labelImage)
+        # bce_loss = torch.nn.BCELoss()
+        # diceLossVal += bce_loss(outImage,labelImage)
+
+        #reshape output to 5x6 tensor
+
+        output=output.resize(5,6)
+
+        dist1, dist2, _, _ = chamfer_dist(output, labels[:, :6])
+        pt_chamfer_loss += torch.mean(dist1) + torch.mean(dist2)
         #pt_edge_loss += edge_loss_pt(output, labels, self.ellipse,idx + 1)
         point_lossTemp =pointMatchLoss(output[:, :2], labels[:, :2],2)
         tangent_lossTemp = pointMatchLoss(output[:, 2:], labels[:, 2:],4)
-        pt_match_loss += (point_lossTemp + tangent_lossTemp)
+        blended_loss += (point_lossTemp*self.pointWeight + tangent_lossTemp*self.tanWeight +pt_chamfer_loss*self.chamferWeight+diceLossVal*self.diceWeight)# experiment to change loss weightings
         point_loss += point_lossTemp
         tangent_loss += tangent_lossTemp
 
         #this cannot handle -1 in lap index. need to be revisited if we want to use lap loss
         #pt_lap_loss += lap_const[idx] * laplace_loss(feat, output, self.ellipse, idx + 1)
-        #print(f" tangent_loss: {tangent_loss}, point_loss: {point_loss}, pt_match_loss: {pt_match_loss}")
+        #print(f" tangent_loss: {tangent_loss}, point_loss: {point_loss}, blended_loss: {blended_loss}")
         #loss = 100 * pt_chamfer_loss + 0.1 * pt_edge_loss + 0.3 * pt_lap_loss
         #loss = pt_chamfer_loss + 0.1 * pt_edge_loss   #  start with only chamfer loss
-        loss = pt_match_loss
-        return [loss,point_loss,tangent_loss]
+        loss = blended_loss
+        return [loss,point_loss,tangent_loss,diceLossVal]
 
     def optimizer_step(self, images, labels):
         self.optimizer.zero_grad()
@@ -224,9 +266,12 @@ class Trainer:
         loss=losses[0]
         pointLoss=losses[1]
         tangentLoss=losses[2]
+        diceLoss=losses[3]
         #write tangent loss and point losses to tensor board
         self.writer.add_scalar('pointLoss', pointLoss, self.global_step)
         self.writer.add_scalar('tangentLoss', tangentLoss, self.global_step)
+        self.writer.add_scalar('diceLoss', diceLoss, self.global_step)
+
 
         loss.backward()
         self.optimizer.step()

@@ -27,7 +27,7 @@ args.add_argument('--testing_data',
                   help='Testing data.',
                   type=str,
                   default='data/testing_data/test_list.txt')
-args.add_argument('--batch_size', help='Batch size.', type=int, default=1)
+args.add_argument('--batch_size', help='Batch size.', type=int, default=128)
 args.add_argument('--learning_rate',
                   help='Learning rate.',
                   type=float,
@@ -35,7 +35,7 @@ args.add_argument('--learning_rate',
 args.add_argument('--learning_rate_decay',
                   help='Learning rate.',
                   type=float,
-                  default=0.97)
+                  default=0.99)
 args.add_argument('--learning_rate_every',
                   help='Learning rate.',
                   type=int,
@@ -59,7 +59,7 @@ args.add_argument('--cnn_type',
 args.add_argument('--checkpoint',
                   help='Checkpoint to use.',
                   type=str,
-                  default=r'D:\pyG\temp\RES\04-04_11-59-08\epoch_3\last_checkpoint.pt'
+                  default=r'D:\pyG\temp\RES\04-11_20-14-13\epoch_1\last_checkpoint.pt'
                   )  # rechanged #changed
 args.add_argument('--info_ellipsoid',
                   help='Initial Ellipsoid info',
@@ -76,7 +76,20 @@ args.add_argument('--feat_dim',
 args.add_argument('--coord_dim',
                   help='Number of units in output layer.',
                   type=int,
-                  default=6)
+                  default=2)
+
+args.add_argument('--tan_weight',
+                  help='weight of tangent loss.',
+                  type=float,
+                  default=0.5)
+
+args.add_argument('--point_weight', help='weight of point loss.',
+                  type=float,
+                  default=0.5)
+args.add_argument('--chamfer_weight',help='weight of chamfer loss.',type=float,default=0.0)
+
+args.add_argument('--dice_weight',help='weight of dice loss.',type=float,default=0.0)
+
 
 FLAGS = args.parse_args()
 
@@ -90,12 +103,16 @@ FLAGS = args.parse_args()
 mydir = os.path.join(os.getcwd(), 'temp', FLAGS.cnn_type,
                      datetime.now().strftime('%m-%d_%H-%M-%S'))
 os.makedirs(mydir)
-dataset=simpleRotoDataset.SimpleRotoDataset(root='D:/pyG/data/points/',labelsJson="points310323_205433.json")
+#dump the contents of args into a text file so we have a record of hyperparameters
+with open(os.path.join(mydir, 'args.txt'), 'w') as f:
+    f.write(str(FLAGS))
+
+dataset=simpleRotoDataset.SimpleRotoDataset(root='D:/pyG/data/points/120423_183451/',labelsJson="points120423_183451.json")
 train_data, test_data = random_split(dataset, [0.95, 0.05])
 data_loader=DataLoader(train_data,batch_size=FLAGS.batch_size,shuffle=False)
 test_loader=DataLoader(test_data,batch_size=1,shuffle=False)
 
-ellipse=ellipsoid(npoints=5)
+ellipse= simpleRotoDataset.ellipsoid2(npoints=5)
 if use_cuda:
     ellipse.shape.x = ellipse.shape.x.cuda()
     ellipse.shape.data=ellipse.shape.data.cuda()
@@ -134,10 +151,9 @@ for epoch in range(FLAGS.epochs):
         start_iter = datetime.now()
         torch.cuda.empty_cache()
         image,spline, path=next(data_iter)
-        #make shapes match in the case where ellipse has more points than spline
-        if spline.shape[1]!=ellipse.Npoints:
-            #append zeros to spline to make it 20 points
-            spline=torch.cat((spline,torch.zeros((spline.shape[0],ellipse.Npoints-spline.shape[1],spline.shape[2]))),dim=1)
+        #add xy coordinates to tangent handles
+        spline[:, :, 2:4] += spline[:, :, :2]
+        spline[:, :, 4:6] += spline[:, :, :2]
 
         image=image.float()
         if use_cuda:
@@ -198,6 +214,8 @@ for epoch in range(FLAGS.epochs):
     test_iter=iter(test_loader)
     for i in range(len(test_data)):
         image, spline ,path =next(test_iter)
+        spline[:, :, 2:4] += spline[:, :, :2]
+        spline[:, :, 4:6] += spline[:, :, :2]
         #print(f"Testing image {i} from path {path} of {len(test_data)}")
         image = image.float()
         if use_cuda:
@@ -210,6 +228,8 @@ for epoch in range(FLAGS.epochs):
         batch=False
         batchSize=1
         if len(output3.shape) == 3:
+            spline[:, :, 2:4] += spline[:, :, :2]
+            spline[:, :, 4:6] += spline[:, :, :2]
             batch=True
             batchSize=output3.shape[0]
             output3=output3.view(output3.shape[0] * output3.shape[1], -1)

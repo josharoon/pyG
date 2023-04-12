@@ -7,7 +7,7 @@ from torch_geometric.data import Data, Dataset, DataLoader
 from torch_geometric.utils import to_networkx
 from torchvision.io import read_image
 from torchvision.transforms import ToPILImage
-from nkShapeGraph import ShapeGraph,point2D
+from nkShapeGraph import ShapeGraph,point2D,ShapeGraphTangents
 from p2mUtils.utils import *
 import matplotlib.pyplot as plt
 #from ImageGraph import ImageGraph
@@ -229,6 +229,27 @@ class ellipsoid():
 
 
 
+#ellipsoid class using shapeGraphTangent class
+class ellipsoid2(ellipsoid):
+    """same as ellipsoid class but using the shapeGraphTangent class"""
+    def createPoints2DList(self):
+        """create on list of point2D objects"""
+        points=self.createPoints()
+        tangents=self.createTangents()
+        #iterate through points and tangents returning a list of point2D objects with tangents as seperate point2D objects
+        points2DList=[]
+        for i in range(self.Npoints):
+            points2DList.append(point2D(points[i]))
+            points2DList.append(point2D([tangents[i][0][0]+points[i][0],tangents[i][0][1]+points[i][1]]))
+            points2DList.append(point2D([tangents[i][1][0]+points[i][0],tangents[i][1][1]+points[i][1]]))
+        self.Npoints=len(points2DList)
+        return points2DList
+
+
+    def createShapeGraph(self):
+        """create a shape graph object"""
+        self.shape=ShapeGraphTangents(self.createPoints2DList())
+
 
 
 
@@ -236,22 +257,22 @@ class ellipsoid():
 
 
 if __name__ == '__main__':
-    dataset = SimpleRotoDataset(root='D:/pyG/data/points/',labelsJson="points310323_205433.json")
-    print(len(dataset))
-    print(dataset[198])
-    dataloader=DataLoader(dataset, batch_size=1, shuffle=True)
-    dataIter=iter(dataloader)
-    data=next(dataIter)
-    print(data)
-    image=ToPILImage()(data[0][0])
-    image.show()
+    # dataset = SimpleRotoDataset(root='D:/pyG/data/points/',labelsJson="points310323_205433.json")
+    # print(len(dataset))
+    # print(dataset[198])
+    # dataloader=DataLoader(dataset, batch_size=1, shuffle=True)
+    # dataIter=iter(dataloader)
+    # data=next(dataIter)
+    # print(data)
+    # image=ToPILImage()(data[0][0])
+    # image.show()
 
 
 
 
 
-#     e=ellipsoid()
-#     e.shape.printData()
-#     e.plotPoints()
-#     e.getVertexNeighbours()
-#     print(e.lapIndex)
+    e=ellipsoid2()
+    e.shape.printData()
+    e.plotPoints()
+    e.getVertexNeighbours()
+    print(e.lapIndex)

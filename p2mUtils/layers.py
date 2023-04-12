@@ -161,9 +161,13 @@ class GraphProjection(nn.Module):
 
     def forward_solo(self, inputs, img_feat_solo):
         coord = inputs
+        #if tensor is (X,6) convert to (X*3,2)
+        if coord.shape[1] == 6:
+            coord = coord.reshape(-1,2)
 
-        X = inputs[:, 0]
-        Y = inputs[:, 1]
+
+        X = coord[:, 0]
+        Y = coord[:, 1]
         #Z = inputs[:, 2]
 
         # we are working without 3d coordinates

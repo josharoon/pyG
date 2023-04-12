@@ -6,6 +6,7 @@ from p2mUtils.layers import *
 from p2mUtils.utils import *
 from p2mUtils.viz import *
 
+
 class Model(nn.Module):
 
     def __init__(self):
@@ -37,8 +38,14 @@ class Model(nn.Module):
         if reshape:
             img_inp = img_inp.unsqueeze(0)
         inputs = get_features(self.ellipse, img_inp)
+        #if inputs dim3 is 6 then reshape dim3 to 2 and dim2 should be 3 times bigger
+        #if inputs.shape[2]==6:
+        #    inputs=inputs.reshape(inputs.shape[0],inputs.shape[1]*3,2)
         #inputs should be 10x2 when we are just interested in xy coordinates
-        inputs=inputs[:,:,:2]
+
+        #inputs=inputs[:,:,:2]
+        #before project we need to add tangent handles to xy coordinates
+
 
         img_feat = self.forward_cnn(img_inp)
         featMaps=[]

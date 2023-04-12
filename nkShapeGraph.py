@@ -12,11 +12,18 @@ import matplotlib.pyplot as plt
 # Point4    vertex coordinate{ 764, 750, 0 }  lftTang { 0, 191.091, 0 }        rhtTgt  { 0, -191.091, 0 }
 
 class point2D:
-    def __init__(self, vertex, lftTang, rhtTang):
+    def __init__(self, vertex, lftTang=None, rhtTang=None):
 
         self.vertex = vertex[:2]
-        self.lftTang = lftTang[:2]
-        self.rhtTang = rhtTang[:2]
+        if lftTang is None:
+              self.lftTang = None
+        else:
+            self.lftTang = lftTang[:2]
+        if rhtTang is None:
+            self.rhtTang = None
+        else:
+            self.rhtTang = rhtTang[:2]
+
 
 
 
@@ -93,7 +100,31 @@ class ShapeGraph:
 
 
 
+# inherit from shape graph with tangents considered as extra vertices rather than features
+class ShapeGraphTangents(ShapeGraph):
+    def __init__(self, points):
+        """take an ordered list of points and create a graph representation of the shape"""
+        self.points = points
+        self.nPoints = len(points)
+        self.edges=[]
+        self.x=[]
+        self.createEdgeIndex()
+        self.createX()
+        self.createData()
 
+    def createEdgeIndex(self):
+        """create the edge index from the graph representation of the shape"""
+        for i in range(self.nPoints):
+            self.edges.append([i, (i + 1) % self.nPoints])
+            #add an edge from the last point to the first point
+        #self.edges.append([self.nPoints - 1, 0])
+        self.edge_index = torch.tensor(self.edges, dtype=torch.long).t().contiguous()
+
+    def createX(self):
+        """for each node convert point into a vector of 6 values and add to the x list"""
+        for point in self.points:
+            self.x.append(point.vertex)
+        self.x = torch.tensor(self.x, dtype=torch.float)
 
 
 
@@ -104,6 +135,7 @@ if __name__ == '__main__':
     point4= point2D([764, 750, 0], [0, 191.091, 0], [0, -191.091, 0])
     points = [point, point2, point3, point4]
     shape = ShapeGraph(points)
+    shape2 = ShapeGraphTangents(points)
     shape.printData()
     shape.drawGraph()
     shape.printGraph()
