@@ -9,7 +9,11 @@ from torchvision.io import read_image
 from torchvision.transforms import ToPILImage
 from nkShapeGraph import ShapeGraph,point2D,ShapeGraphTangents
 from p2mUtils.utils import *
+from p2mUtils.viz import plot_distance_field
+from tqdm import tqdm
+
 import matplotlib.pyplot as plt
+from dfUtils.cubicCurvesUtil import *
 #from ImageGraph import ImageGraph
 import json
 
@@ -23,6 +27,12 @@ class SimpleRotoDataset(Dataset):
         super().__init__(root, transform, pre_transform,pre_filter)
         self.root=root
 
+    def normalize_image(self, image):
+        return image / 255.0
+
+    def normalize_distance_field(self, distance_field):
+        d_max = torch.max(distance_field)
+        return distance_field / d_max
 
 
 
@@ -49,7 +59,17 @@ class SimpleRotoDataset(Dataset):
         return point2D(shape['center'],shape['leftTangent'],shape['rightTangent'])
     def getPoints2DList(self, pointList):
         """convert a list of json points to a list of point2D objects"""
-        return [self.Shape2Point2D(shape) for shape in pointList]
+        points2D = [self.Shape2Point2D(shape) for shape in pointList]
+        # for point in points2D:
+        #     point.normalize
+        #add center point to tangent handels in each point
+        for point in points2D:
+            point.lftTang[0]=point.lftTang[0]=point.lftTang[0]+point.vertex[0]
+            point.lftTang[1]=point.lftTang[1]=point.lftTang[1]+point.vertex[1]
+            point.rhtTang[0]=point.rhtTang[0]=point.rhtTang[0]+point.vertex[0]
+            point.rhtTang[1]=point.rhtTang[1]=point.rhtTang[1]+point.vertex[1]
+
+        return points2D
 
     def process(self):
         """process the data"""
@@ -57,17 +77,28 @@ class SimpleRotoDataset(Dataset):
         if self.processed_file_exists():
             return
 
-
         self.labels = Path(self.root).joinpath(self.labelsFile)
         self.labelsDict = self.loadLabelsJson()
-        for i in range(1,len(self)+1):
-            image,label=self.get(i-1)
-            #convert label to a graph
-            labelGraph=ShapeGraph(self.getPoints2DList(label))
-            #create a data object
-            data = Data(x=labelGraph.x, edge_index=labelGraph.edge_index,y=image)
-            #save the data object
-            torch.save(data, self.processed_paths[i-1])
+
+        # Wrap the loop with tqdm to display a progress bar
+        for i in tqdm(range(1, len(self) + 1), desc="Processing", unit="image"):
+            image, label = self.get(i - 1)
+            image=self.normalize_image(image)
+            # convert label to a graph
+            labelGraph = ShapeGraph(self.getPoints2DList(label))
+            # create a data object
+            data = Data(x=labelGraph.x, edge_index=labelGraph.edge_index, y=image)
+            # create distance field from image
+            control_points = convert_to_cubic_control_points(data.x[None, :]).to(th.float64)
+            grid_size = data.y.shape[1]
+            source_points = create_grid_points(grid_size, 0, 250, 0, 250)
+            distance_field = distance_to_curves(source_points, control_points, grid_size).view(grid_size, grid_size)
+            distance_field = th.flip(distance_field, (1,))  # flip y axis to match image coordinates
+            distance_field = self.normalize_distance_field(distance_field)
+            # save the data object
+            torch.save(data, self.processed_paths[i - 1])
+            # save the distance field
+            torch.save(distance_field, Path(self.processed_dir).joinpath(f'distance_field.{i - 1:04d}.pt'))
 
     def processed_file_exists(self):
         # get list of all processed file names
@@ -114,8 +145,9 @@ class SimpleRotoDataset(Dataset):
         """get the data from the .pt files in the processed directory if file exists otherwise get the data from the raw directory"""
         if  Path(self.processed_dir).joinpath(self.processed_file_names[idx]).exists():
             data = torch.load(self.processed_paths[idx])
-            #print(f"loaded {self.processed_paths[idx]}")
-            return data.y, data.x , self.processed_paths[idx]
+            df=torch.load(Path(self.processed_dir).joinpath(f'distance_field.{idx:04d}.pt'))
+
+            return data.y, data.x , self.processed_paths[idx],df
         else:
             #get the image
             image=read_image(self.raw_paths[idx])
@@ -257,22 +289,36 @@ class ellipsoid2(ellipsoid):
 
 
 if __name__ == '__main__':
-    # dataset = SimpleRotoDataset(root='D:/pyG/data/points/',labelsJson="points310323_205433.json")
-    # print(len(dataset))
-    # print(dataset[198])
-    # dataloader=DataLoader(dataset, batch_size=1, shuffle=True)
-    # dataIter=iter(dataloader)
-    # data=next(dataIter)
-    # print(data)
-    # image=ToPILImage()(data[0][0])
-    # image.show()
+    dataset = SimpleRotoDataset(root=r'D:\pyG\data\points\120423_183451_rev',labelsJson="points120423_183451_rev.json")
+    #print(len(dataset))
+    #print(dataset[99])
+    dataloader=DataLoader(dataset, batch_size=1, shuffle=True)
+    dataIter=iter(dataloader)
+    data=next(dataIter)
+    #print(data)
+    image=ToPILImage()(data[0][0])
+    plt.imshow(image)
+    plt.show()
+    #plot distance field
+    df = data[3][0]
+    plot_distance_field(df,250)
+    #normalize distance field
+    d_max = torch.max(df)
+    print(d_max)
+    df=df / d_max
+    plot_distance_field(df,1)
+    control_points=convert_to_cubic_control_points(data[1])
+    plotCubicSpline(control_points)
 
 
 
 
 
-    e=ellipsoid2()
-    e.shape.printData()
-    e.plotPoints()
-    e.getVertexNeighbours()
-    print(e.lapIndex)
+
+
+    #
+    # e=ellipsoid2()
+    # e.shape.printData()
+    # e.plotPoints()
+    # e.getVertexNeighbours()
+    # print(e.lapIndex)

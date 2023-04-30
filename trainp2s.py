@@ -27,7 +27,7 @@ args.add_argument('--testing_data',
                   help='Testing data.',
                   type=str,
                   default='data/testing_data/test_list.txt')
-args.add_argument('--batch_size', help='Batch size.', type=int, default=128)
+args.add_argument('--batch_size', help='Batch size.', type=int, default=5)
 args.add_argument('--learning_rate',
                   help='Learning rate.',
                   type=float,
@@ -35,7 +35,7 @@ args.add_argument('--learning_rate',
 args.add_argument('--learning_rate_decay',
                   help='Learning rate.',
                   type=float,
-                  default=0.99)
+                  default=1.0)
 args.add_argument('--learning_rate_every',
                   help='Learning rate.',
                   type=int,
@@ -59,7 +59,7 @@ args.add_argument('--cnn_type',
 args.add_argument('--checkpoint',
                   help='Checkpoint to use.',
                   type=str,
-                  default=r'D:\pyG\temp\RES\04-11_20-14-13\epoch_1\last_checkpoint.pt'
+                  default=r'D:\pyG\temp\RES\04-29_20-04-34\epoch_77\last_checkpoint.pt'
                   )  # rechanged #changed
 args.add_argument('--info_ellipsoid',
                   help='Initial Ellipsoid info',
@@ -81,15 +81,30 @@ args.add_argument('--coord_dim',
 args.add_argument('--tan_weight',
                   help='weight of tangent loss.',
                   type=float,
-                  default=0.5)
+                  default=0.10)
 
 args.add_argument('--point_weight', help='weight of point loss.',
                   type=float,
-                  default=0.5)
+                  default=0.10)
 args.add_argument('--chamfer_weight',help='weight of chamfer loss.',type=float,default=0.0)
 
-args.add_argument('--dice_weight',help='weight of dice loss.',type=float,default=0.0)
+args.add_argument('--align_weight',help='weight of align loss.',type=float,default=0.5)
 
+args.add_argument('--surface_weight',help='weight of surface loss.',type=float,default=0.5)
+
+args.add_argument('--df_weight',help='weight of distance field loss.',type=float,default=0.0)
+
+args.add_argument('--dice_weight',help='weight of dice loss.',type=float,default=0.1)
+
+args.add_argument('--sample_percentage',
+                  help='Percentage of the dataset to use for training and testing.',
+                  type=float,
+                  default=1.0)
+
+args.add_argument('--train_percentage',
+                  help='Percentage of the dataset to use for training.',
+                  type=float,
+                  default=1.0)
 
 FLAGS = args.parse_args()
 
@@ -107,10 +122,25 @@ os.makedirs(mydir)
 with open(os.path.join(mydir, 'args.txt'), 'w') as f:
     f.write(str(FLAGS))
 
-dataset=simpleRotoDataset.SimpleRotoDataset(root='D:/pyG/data/points/120423_183451/',labelsJson="points120423_183451.json")
-train_data, test_data = random_split(dataset, [0.95, 0.05])
-data_loader=DataLoader(train_data,batch_size=FLAGS.batch_size,shuffle=False)
-test_loader=DataLoader(test_data,batch_size=1,shuffle=False)
+dataset=simpleRotoDataset.SimpleRotoDataset(root=r'D:\pyG\data\points\120423_183451_rev',labelsJson="points120423_183451_rev.json")
+sample_percentage = FLAGS.sample_percentage
+if sample_percentage > 1.0 or sample_percentage <= 0.0:
+    raise ValueError("Sample percentage must be between 0 and 1.")
+
+total_data = len(dataset)
+sample_data_size = int(total_data * sample_percentage)
+indices = np.random.choice(total_data, sample_data_size, replace=False)
+sampled_dataset = torch.utils.data.Subset(dataset, indices)
+
+train_percentage = FLAGS.train_percentage
+if train_percentage > 1.0 or train_percentage <= 0.0:
+    raise ValueError("Training percentage must be between 0 and 1.")
+
+train_data_size = int(sample_data_size * train_percentage)
+test_data_size = sample_data_size - train_data_size
+train_data, test_data = random_split(sampled_dataset, [train_data_size, test_data_size])
+data_loader = DataLoader(train_data, batch_size=FLAGS.batch_size, shuffle=False)
+test_loader = DataLoader(test_data, batch_size=1, shuffle=False)
 
 ellipse= simpleRotoDataset.ellipsoid2(npoints=5)
 if use_cuda:
@@ -150,10 +180,10 @@ for epoch in range(FLAGS.epochs):
     for iters in range(iterNum):
         start_iter = datetime.now()
         torch.cuda.empty_cache()
-        image,spline, path=next(data_iter)
-        #add xy coordinates to tangent handles
-        spline[:, :, 2:4] += spline[:, :, :2]
-        spline[:, :, 4:6] += spline[:, :, :2]
+        image,spline, path,df=next(data_iter)
+        # #add xy coordinates to tangent handles
+        # spline[:, :, 2:4] += spline[:, :, :2]
+        # spline[:, :, 4:6] += spline[:, :, :2]
 
         image=image.float()
         if use_cuda:
@@ -170,7 +200,7 @@ for epoch in range(FLAGS.epochs):
 
 
 
-        dists,out1=trainer.optimizer_step(image,spline)
+        dists,out1=trainer.optimizer_step(image,spline,df)
         all_loss[iters] = dists
         mean_loss = np.mean(all_loss[:,0][np.where(all_loss[:,0])])
         mean_loss_point = np.mean(all_loss[:,1][np.where(all_loss[:,1])])
@@ -211,65 +241,65 @@ for epoch in range(FLAGS.epochs):
     print('-------- Training checkpoint last saved !')
 
     print('-------- Testing epoch {} ...'.format(epoch + 1))
-    test_iter=iter(test_loader)
-    for i in range(len(test_data)):
-        image, spline ,path =next(test_iter)
-        spline[:, :, 2:4] += spline[:, :, :2]
-        spline[:, :, 4:6] += spline[:, :, :2]
-        #print(f"Testing image {i} from path {path} of {len(test_data)}")
-        image = image.float()
-        if use_cuda:
-            image = image.cuda()
-            spline = spline.cuda()
-        output3 = model(image)
-        shape = process_output(output3)
-        #calculate loss
-        # if batch feed in 1 spline/output at a time
-        batch=False
-        batchSize=1
-        if len(output3.shape) == 3:
-            spline[:, :, 2:4] += spline[:, :, :2]
-            spline[:, :, 4:6] += spline[:, :, :2]
-            batch=True
-            batchSize=output3.shape[0]
-            output3=output3.view(output3.shape[0] * output3.shape[1], -1)
-            spline=spline.view(spline.shape[0] * spline.shape[1], -1)
-        #spline=spline.unsqueeze_(1)
-        output3=[output3[None]]
-        dists = trainer._get_loss_pt(spline, output3,spline,6)
-
-        all_loss_test[i] = [dists[0].item(), dists[1].item(), dists[2].item()]
-        #divide by batch size
-        if batch:
-            all_loss_test[i]=all_loss_test[i]/batchSize
-
-        mean_loss_test = np.mean(all_loss_test[:, 0][np.where(all_loss_test[:, 0])])
-        mean_loss_point_test = np.mean(all_loss_test[:, 1][np.where(all_loss_test[:, 1])])
-        mean_loss_tangent_test = np.mean(all_loss_test[:, 2][np.where(all_loss_test[:, 2])])
-
-
-
-
-
-
-        pred_path = epoch_dir + '/outputs/'
-        #save list of point2D objects to file pickle format
-        try:
-            with open(pred_path+f"/{epoch}_{i}.pkl", "wb") as f:
-                pickle.dump([path,shape], f, protocol=pickle.HIGHEST_PROTOCOL)
-        except Exception as ex:
-            print("Error during pickling object (Possibly unsupported):", ex)
-
-
-    print('-------- Testing epoch {} done !'.format(epoch + 1))
-    # write the loss,point loss and tangent loss to tensorboard
-    writer.add_scalar('Loss/test', mean_loss_test, epoch)
-    writer.add_scalar('Loss/test_point', mean_loss_point_test, epoch)
-    writer.add_scalar('Loss/test_tangent', mean_loss_tangent_test, epoch)
-    print("Mean loss test:", mean_loss_test)
-    print("Mean loss point test:", mean_loss_point_test)
-    print("Mean loss tangent test:", mean_loss_tangent_test)
-
-    print("")
-    print('\n')
+    # test_iter=iter(test_loader)
+    # for i in range(len(test_data)):
+    #     image, spline ,path,df =next(test_iter)
+    #     spline[:, :, 2:4] += spline[:, :, :2]
+    #     spline[:, :, 4:6] += spline[:, :, :2]
+    #     #print(f"Testing image {i} from path {path} of {len(test_data)}")
+    #     image = image.float()
+    #     if use_cuda:
+    #         image = image.cuda()
+    #         spline = spline.cuda()
+    #     output3 = model(image)
+    #     shape = process_output(output3)
+    #     #calculate loss
+    #     # if batch feed in 1 spline/output at a time
+    #     batch=False
+    #     batchSize=1
+    #     if len(output3.shape) == 3:
+    #         spline[:, :, 2:4] += spline[:, :, :2]
+    #         spline[:, :, 4:6] += spline[:, :, :2]
+    #         batch=True
+    #         batchSize=output3.shape[0]
+    #         output3=output3.view(output3.shape[0] * output3.shape[1], -1)
+    #         spline=spline.view(spline.shape[0] * spline.shape[1], -1)
+    #     #spline=spline.unsqueeze_(1)
+    #     output3=[output3[None]]
+    #     dists = trainer._get_loss_pt(spline, output3,spline,6)
+    #
+    #     all_loss_test[i] = [dists[0].item(), dists[1].item(), dists[2].item()]
+    #     #divide by batch size
+    #     if batch:
+    #         all_loss_test[i]=all_loss_test[i]/batchSize
+    #
+    #     mean_loss_test = np.mean(all_loss_test[:, 0][np.where(all_loss_test[:, 0])])
+    #     mean_loss_point_test = np.mean(all_loss_test[:, 1][np.where(all_loss_test[:, 1])])
+    #     mean_loss_tangent_test = np.mean(all_loss_test[:, 2][np.where(all_loss_test[:, 2])])
+    #
+    #
+    #
+    #
+    #
+    #
+    #     pred_path = epoch_dir + '/outputs/'
+    #     #save list of point2D objects to file pickle format
+    #     try:
+    #         with open(pred_path+f"/{epoch}_{i}.pkl", "wb") as f:
+    #             pickle.dump([path,shape], f, protocol=pickle.HIGHEST_PROTOCOL)
+    #     except Exception as ex:
+    #         print("Error during pickling object (Possibly unsupported):", ex)
+    #
+    #
+    # print('-------- Testing epoch {} done !'.format(epoch + 1))
+    # # write the loss,point loss and tangent loss to tensorboard
+    # writer.add_scalar('Loss/test', mean_loss_test, epoch)
+    # writer.add_scalar('Loss/test_point', mean_loss_point_test, epoch)
+    # writer.add_scalar('Loss/test_tangent', mean_loss_tangent_test, epoch)
+    # print("Mean loss test:", mean_loss_test)
+    # print("Mean loss point test:", mean_loss_point_test)
+    # print("Mean loss tangent test:", mean_loss_tangent_test)
+    #
+    # print("")
+    # print('\n')
 

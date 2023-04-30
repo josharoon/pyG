@@ -13,16 +13,23 @@ import matplotlib.pyplot as plt
 
 class point2D:
     def __init__(self, vertex, lftTang=None, rhtTang=None):
-
         self.vertex = vertex[:2]
         if lftTang is None:
-              self.lftTang = None
+            self.lftTang = None
         else:
             self.lftTang = lftTang[:2]
         if rhtTang is None:
             self.rhtTang = None
         else:
             self.rhtTang = rhtTang[:2]
+
+    def normalize(self, max_value=224.0):
+        self.vertex = [coord / max_value for coord in self.vertex]
+        if self.lftTang is not None:
+            self.lftTang = [coord / max_value for coord in self.lftTang]
+        if self.rhtTang is not None:
+            self.rhtTang = [coord / max_value for coord in self.rhtTang]
+
 
 
 

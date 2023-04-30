@@ -1,4 +1,7 @@
+import random
+
 import torch.optim as optim
+
 from p2mUtils.miouSpline import splineArray2Image
 from torch import nn
 from torchvision.transforms import PILToTensor
@@ -6,6 +9,8 @@ from torchvision.transforms import PILToTensor
 from .losses import *
 from .utils import *
 from .chamfer import nn_distance_function as chamfer_dist
+from dfUtils.cubicCurvesUtil import *
+from p2mUtils.viz import *
 from torchmetrics.classification import dice
 use_cuda = torch.cuda.is_available()
 
@@ -27,6 +32,9 @@ class Trainer:
         self.pointWeight=args.point_weight
         self.chamferWeight=args.chamfer_weight
         self.diceWeight=args.dice_weight
+        self.dfWeight=args.df_weight
+        self.alignWeight=args.align_weight
+        self.surfWeight=args.surface_weight
         self.writer=writer
 
     # def get_loss(self, img_inp, labels):
@@ -45,7 +53,7 @@ class Trainer:
         for param_group in self.optimizer.param_groups:
             param_group['lr'] *= self.args.learning_rate_decay
 
-    def get_loss(self, img_inp, labels,ncoords):
+    def get_loss(self, img_inp, labels,ncoords,df):
         if type(img_inp) != list:
             batch = len(img_inp.shape) == 4
             inputs = get_features(self.ellipse, img_inp) #return data from ellipse
@@ -57,11 +65,11 @@ class Trainer:
             outputs = self.network(img_inp[0], img_inp[1])
         if batch:
             losses=[0,0,0,0]
-            for idx, (input, label) in enumerate(zip(inputs, labels)):
+            for idx, (input, label,dfi) in enumerate(zip(inputs, labels,df)):
                 #output = [out[idx] for out in outputs]
 
                 output=[outputs] #we only have one output at the moment
-                itLosses=self._get_loss(input, output, label,ncoords)
+                itLosses=self._get_loss(input, output, label,ncoords,dfi)
                 losses[0]+=itLosses[0]
                 losses[1]+=itLosses[1]
                 losses[2]+=itLosses[2]
@@ -98,7 +106,7 @@ class Trainer:
                     loss += self.args.weight_decay * torch.sum(var**2)
         return loss
 
-    def _get_loss_pt(self, inputs, outputs, labels, nCoords):
+    def _get_loss_pt(self, inputs, outputs, labels, nCoords,df):
         # Edge Loss
         def edge_loss_pt(pred, labels, ellipse, block_id):
             gt_pts = labels[:, :2]
@@ -199,6 +207,64 @@ class Trainer:
                 return laplace_loss + move_loss
             # Chamfer Loss
 
+        def discrepancy_l2_squared(distance_field_A, distance_field_B):
+            return (distance_field_A - distance_field_B) ** 2
+
+        def distance_field_loss(distance_field_A, distance_field_B):
+            vol_S = distance_field_A.numel()
+            loss = th.sum(discrepancy_l2_squared(distance_field_A, distance_field_B)) / vol_S
+            return loss
+        def get_distancefield_loss(input1, input2, input2_df):
+            #convert input 1 to correct format by subtracting main points from tangent handels
+
+            # input1[:, 2:4] = input1[:, 2:4] - input1[:, :2]
+            # input1[:, 4:6] = input1[:, 4:6] - input1[:, :2]
+            # # input2[:, 2:4] = input2[:, 2:4] - input2[:, :2]
+            # # input2[:, 4:6] = input2[:, 4:6] - input2[:, :2]
+
+            #get control points
+            Input_1_control_points=convert_to_cubic_control_points(input1[None,:]).to(torch.float64)
+
+            source_points=create_grid_points(224,0,250,0,250).to(torch.float64)
+            #get distance field
+            distance_field = distance_to_curves(source_points, Input_1_control_points, 224).view(224, 224)
+            distance_field = th.flip(distance_field, (1,))
+            #normalize distance field to match input2_df
+            dmax=torch.max(distance_field)
+            distance_field=distance_field/dmax
+            loss = distance_field_loss(distance_field, input2_df)
+
+            # with a 1 in 100 random chance plot the distance field
+            if random.randint(0, 100) == 1:
+                Input_2_control_points = convert_to_cubic_control_points(input2[None, :]).to(torch.float64)
+                # plot the distance field
+                plot_distance_field(distance_field,1,"output")
+                plot_distance_field(input2_df,1,"GT")
+
+                plotCubicSpline(Input_1_control_points)
+                plotCubicSpline(Input_2_control_points)
+
+                input2_df=distance_to_curves(source_points, Input_2_control_points, 224).view(224, 224)
+                input2_df = th.flip(input2_df, (1,))
+                dmax = torch.max(input2_df)
+                input2_df = input2_df / dmax
+                plot_distance_field(input2_df,1,"GT_from_input2")
+
+
+            return loss,distance_field
+
+        def compute_alignment_fields(distance_fields):
+            """Compute alignment unit vector fields from distance fields."""
+            dx = distance_fields[..., 2:, 1:-1] - distance_fields[..., :-2, 1:-1]
+            dy = distance_fields[..., 1:-1, 2:] - distance_fields[..., 1:-1, :-2]
+            alignment_fields = th.stack([dx, dy], dim=-1)
+            return alignment_fields / th.sqrt(th.sum(alignment_fields ** 2, dim=-1, keepdims=True) + 1e-6)
+
+        def compute_occupancy_fields(distance_fields, eps=(2 / 128) ** 2):
+            """Compute smooth occupancy fields from distance fields."""
+            occupancy_fields = 1 - th.clamp(distance_fields / eps, 0, 1)
+            return occupancy_fields ** 2 * (3 - 2 * occupancy_fields)
+
         pt_chamfer_loss = 0.
         pt_edge_loss = 0.
         pt_lap_loss = 0.
@@ -206,6 +272,7 @@ class Trainer:
         point_loss = 0.
         tangent_loss = 0.
         diceLossVal = 0.
+        dfLossVal = 0.
         lap_const = [0.2, 1., 1.]
         idx=0 #we only have block 1 at the moment
         # for idx, (output, feat) in enumerate(
@@ -241,13 +308,31 @@ class Trainer:
         #reshape output to 5x6 tensor
 
         output=output.resize(5,6)
+        #calculate dice loss
+
+
 
         dist1, dist2, _, _ = chamfer_dist(output, labels[:, :6])
+
+        #calculate distance field for output
+        dfloss, dfOut = get_distancefield_loss(output, labels[:, :6], df)
+        dfLossVal += dfloss
+        alignment_fields=compute_alignment_fields(dfOut)
+        occupancy_fields=compute_occupancy_fields(dfOut)
+        target_occupancy_fields = compute_occupancy_fields(df)
+        target_alignment_fields = compute_alignment_fields(df)
+        surfaceloss = th.mean(target_occupancy_fields * dfOut + df * occupancy_fields)
+        alignmentloss = th.mean(1 - th.sum(target_alignment_fields * alignment_fields, dim=-1) ** 2)
+
+
+        print(f"dfLossVal: {dfLossVal}")
+
+
         pt_chamfer_loss += torch.mean(dist1) + torch.mean(dist2)
         #pt_edge_loss += edge_loss_pt(output, labels, self.ellipse,idx + 1)
         point_lossTemp =pointMatchLoss(output[:, :2], labels[:, :2],2)
         tangent_lossTemp = pointMatchLoss(output[:, 2:], labels[:, 2:],4)
-        blended_loss += (point_lossTemp*self.pointWeight + tangent_lossTemp*self.tanWeight +pt_chamfer_loss*self.chamferWeight+diceLossVal*self.diceWeight)# experiment to change loss weightings
+        blended_loss += (point_lossTemp*self.pointWeight + tangent_lossTemp*self.tanWeight +dfLossVal*self.dfWeight+ surfaceloss*self.surfWeight + alignmentloss*self.alignWeight+self.diceWeight*diceLossVal+self.chamferWeight*pt_chamfer_loss)
         point_loss += point_lossTemp
         tangent_loss += tangent_lossTemp
 
@@ -259,10 +344,10 @@ class Trainer:
         loss = blended_loss
         return [loss,point_loss,tangent_loss,diceLossVal]
 
-    def optimizer_step(self, images, labels):
+    def optimizer_step(self, images, labels, df):
         self.optimizer.zero_grad()
         #loss, output1, output2, output3 = self.get_loss(images, labels)
-        losses, output1 = self.get_loss(images, labels,self.ncoords)
+        losses, output1 = self.get_loss(images, labels,self.ncoords,df)
         loss=losses[0]
         pointLoss=losses[1]
         tangentLoss=losses[2]
