@@ -3,9 +3,9 @@ import torch
 import torch.nn as nn
 from p2mUtils.utils import create_sparse_tensor
 from torch.nn import functional as F
-from p2mUtils.viz import plot_to_tensorboard
+from p2mUtils.viz import plot_to_tensorboard,plotCubicSpline
 import numpy as np
-
+from dfUtils.cubicCurvesUtil import convert_to_cubic_control_points
 from .inits import *
 
 
@@ -149,12 +149,21 @@ class GraphProjection(nn.Module):
     def _prepare(self, img_feat):
         self.img_feat = img_feat
 
+
     def forward(self, inputs):
         outputs = []
         #print('inputs', inputs.shape)
         for idx, input_solo in enumerate(inputs):
             img_feat = [feats[idx] for feats in self.img_feat]
-            output = self.forward_solo(inputs[0], img_feat)
+            #output = self.forward_solo(inputs[0], img_feat)
+            #print('input_solo', input_solo.shape)
+            #convert input_solo from 15x2 to 5x6
+
+
+            #points=convert_to_cubic_control_points(input_solo.reshape(5,6).unsqueeze(0))
+            #plotCubicSpline(points,"spline before projection")
+
+            output = self.forward_solo(input_solo, img_feat)
             outputs.append(output)
         outputs = torch.stack(outputs, 0)
         return outputs

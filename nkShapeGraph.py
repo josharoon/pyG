@@ -30,6 +30,17 @@ class point2D:
         if self.rhtTang is not None:
             self.rhtTang = [coord / max_value for coord in self.rhtTang]
 
+    def scalePoints(self, width,height):
+        self.vertex[0]*=width
+        self.vertex[1]*=height
+        if self.lftTang is not None:
+            self.lftTang[0]*=width
+            self.lftTang[1]*=height
+        if self.rhtTang is not None:
+            self.rhtTang[0]*=width
+            self.rhtTang[1]*=height
+
+
 
 
 

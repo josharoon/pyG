@@ -1,5 +1,6 @@
 """simpleRotoDataset.py - A simple dataset for testing and training rotoscoping models."""
 import math
+import re
 
 import torch
 from pathlib import Path
@@ -11,21 +12,22 @@ from nkShapeGraph import ShapeGraph,point2D,ShapeGraphTangents
 from p2mUtils.utils import *
 from p2mUtils.viz import plot_distance_field
 from tqdm import tqdm
-
+import os
+import concurrent.futures
 import matplotlib.pyplot as plt
-from dfUtils.cubicCurvesUtil import *
+import glob
 #from ImageGraph import ImageGraph
 import json
 
 
-
-
 class SimpleRotoDataset(Dataset):
     """A simple dataset for testing and training rotoscoping models."""
-    def  __init__(self, root,labelsJson, transform=None, pre_transform=None,pre_filter=None):
+    def  __init__(self, root,labelsJson, transform=None, pre_transform=None,pre_filter=None, preprocess=True):
         self.labelsFile=labelsJson
         super().__init__(root, transform, pre_transform,pre_filter)
         self.root=root
+        self.preprocess = preprocess
+
 
     def normalize_image(self, image):
         return image / 255.0
@@ -71,60 +73,78 @@ class SimpleRotoDataset(Dataset):
 
         return points2D
 
-    def process(self):
-        """process the data"""
-        # if processed files already exist then return
-        if self.processed_file_exists():
-            return
+    def process_image(self, index):
+        image, label = self.get(index)
+        image = self.normalize_image(image)
+        labelGraph = ShapeGraph(self.getPoints2DList(label))
+        #we scale everything to 224x224 for the model
+        original_height, original_width = image.shape[1:]
+        if original_height != 224 or original_width != 224:
+            # Calculate scaling factors
+            height_scale_factor = 224 / original_height
+            width_scale_factor = 224 / original_width
+            # Resize the image
+            image = th.nn.functional.interpolate(
+                image.unsqueeze(0), size=(224, 224), mode="bilinear"
+            ).squeeze(0)
+            # Scale the control points
+            for point in labelGraph.points:
+               point.scalePoints(width_scale_factor,height_scale_factor)
+            labelGraph.x = []
+            labelGraph.createX()
+            labelGraph.createData()
 
+
+
+        data = Data(x=labelGraph.x, edge_index=labelGraph.edge_index, y=image)
+        control_points = convert_to_cubic_control_points(data.x[None, :]).to(th.float64)
+        grid_size = data.y.shape[1]
+        source_points = create_grid_points(grid_size, 0, 224, 0, 224)
+
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        control_points = control_points.to(device)
+        source_points = source_points.to(device)
+
+        distance_field = distance_to_curves(source_points, control_points, grid_size).view(grid_size, grid_size)
+        distance_field = th.flip(distance_field, (1,0))
+        distance_field = self.normalize_distance_field(distance_field)
+
+        torch.save(data, self.processed_paths[index])
+        torch.save(distance_field, Path(self.processed_dir).joinpath(f'distance_field.{index+1:04d}.pt'))
+
+
+    def process(self):
         self.labels = Path(self.root).joinpath(self.labelsFile)
         self.labelsDict = self.loadLabelsJson()
 
-        # Wrap the loop with tqdm to display a progress bar
-        for i in tqdm(range(1, len(self) + 1), desc="Processing", unit="image"):
-            image, label = self.get(i - 1)
-            image=self.normalize_image(image)
-            # convert label to a graph
-            labelGraph = ShapeGraph(self.getPoints2DList(label))
-            # create a data object
-            data = Data(x=labelGraph.x, edge_index=labelGraph.edge_index, y=image)
-            # create distance field from image
-            control_points = convert_to_cubic_control_points(data.x[None, :]).to(th.float64)
-            grid_size = data.y.shape[1]
-            source_points = create_grid_points(grid_size, 0, 250, 0, 250)
-            distance_field = distance_to_curves(source_points, control_points, grid_size).view(grid_size, grid_size)
-            distance_field = th.flip(distance_field, (1,))  # flip y axis to match image coordinates
-            distance_field = self.normalize_distance_field(distance_field)
-            # save the data object
-            torch.save(data, self.processed_paths[i - 1])
-            # save the distance field
-            torch.save(distance_field, Path(self.processed_dir).joinpath(f'distance_field.{i - 1:04d}.pt'))
+        num_workers = 2  # Adjust this according to your system's resources
 
-    def processed_file_exists(self):
-        # get list of all processed file names
-        processed_file_names = self.processed_file_names
-        # check if any are missing
+        # Find all processed data files using glob
+        processed_files = set(glob.glob(os.path.join(self.processed_dir, '*.pt')))
+        pattern = re.compile(r'.*\.(\d+)\.pt')
+        processed_indices = {int(pattern.match(os.path.basename(f)).group(1)) for f in processed_files}
+        #we need to subtract 1 from each index because the indices in the json file start at 1
+        processed_indices={x-1 for x in processed_indices}
+        print(f"Found {len(processed_files)} processed files.")
 
-        for file_name in processed_file_names:
-            processed_path=Path(self.processed_dir).joinpath(file_name)
-            if processed_path.exists():
-                continue
-            else:
-                # delete any files in processed directory
-                for file in Path(self.processed_dir).iterdir():
-                    file.unlink()
-                return False
-        return True
+        print(f"Found {len(processed_indices)} processed indices.")
 
-
-
-
-
+        # Calculate unprocessed indices
+        print("Calculating unprocessed indices...")
+        unprocessed_indices = [i for i in range(len(self)) if i not in processed_indices]
+        print(f"Found {len(unprocessed_indices)} unprocessed files.")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
+            list(tqdm(executor.map(self.process_image, unprocessed_indices), total=len(unprocessed_indices),
+                      desc="Processing",
+                      unit="image"))
 
     @property
     def raw_file_names(self):
         #get a list of all the files in the root directory with the extension .png
-        return [f for f in Path(self.root).iterdir() if f.suffix=='.png']
+        paths=[f for f in Path(self.root).iterdir() if f.suffix=='.png']
+        #makes sure the files are sorted by name by number e.g. spoints.0001.png, spoints.0002.png take into account varying number of digits
+        paths.sort(key=lambda f: int(''.join(filter(str.isdigit, f.name))))
+        return paths
 
 
 
@@ -145,8 +165,7 @@ class SimpleRotoDataset(Dataset):
         """get the data from the .pt files in the processed directory if file exists otherwise get the data from the raw directory"""
         if  Path(self.processed_dir).joinpath(self.processed_file_names[idx]).exists():
             data = torch.load(self.processed_paths[idx])
-            df=torch.load(Path(self.processed_dir).joinpath(f'distance_field.{idx:04d}.pt'))
-
+            df=torch.load(Path(self.processed_dir).joinpath(f'distance_field.{idx+1:04d}.pt'))
             return data.y, data.x , self.processed_paths[idx],df
         else:
             #get the image
@@ -289,36 +308,28 @@ class ellipsoid2(ellipsoid):
 
 
 if __name__ == '__main__':
-    dataset = SimpleRotoDataset(root=r'D:\pyG\data\points\120423_183451_rev',labelsJson="points120423_183451_rev.json")
-    #print(len(dataset))
-    #print(dataset[99])
-    dataloader=DataLoader(dataset, batch_size=1, shuffle=True)
-    dataIter=iter(dataloader)
-    data=next(dataIter)
-    #print(data)
-    image=ToPILImage()(data[0][0])
-    plt.imshow(image)
-    plt.show()
-    #plot distance field
-    df = data[3][0]
-    plot_distance_field(df,250)
-    #normalize distance field
-    d_max = torch.max(df)
-    print(d_max)
-    df=df / d_max
-    plot_distance_field(df,1)
-    control_points=convert_to_cubic_control_points(data[1])
+    from dfUtils.cubicCurvesUtil import *
+
+    #dataset = SimpleRotoDataset(root=r'D:\pyG\data\points\120423_183451_rev', labelsJson="points120423_183451_rev.json")
+    dataset = SimpleRotoDataset(root=r'D:\pyG\data\points\transform_test', labelsJson="pointstransform_test.json")
+    # print(len(dataset))
+    # print(dataset[0])
+    dataloader = DataLoader(dataset, batch_size=1, shuffle=True)
+    dataIter = iter(dataloader)
+    data = next(dataIter)
+    #
+    #
+    #
+    # plot cubic spline from ground truth
+    control_points = convert_to_cubic_control_points(data[1])
     plotCubicSpline(control_points)
 
+    plt.show()
 
 
 
 
 
 
-    #
-    # e=ellipsoid2()
-    # e.shape.printData()
-    # e.plotPoints()
-    # e.getVertexNeighbours()
-    # print(e.lapIndex)
+
+0

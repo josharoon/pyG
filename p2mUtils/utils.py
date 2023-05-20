@@ -119,6 +119,13 @@ def get_features(ellipse, images):
     else:
         return ellipse.shape.data.x
 
+def get_features_labels(labels, images):
+    if len(images.shape) == 4:
+        batch_size = int(images.shape[0])
+        return labels.unsqueeze(0).expand(batch_size, -1, -1)
+    else:
+        return labels
+
 
 def load_image(img_path):
     img = io.imread(img_path)

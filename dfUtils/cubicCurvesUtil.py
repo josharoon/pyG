@@ -2,7 +2,6 @@ import torch as th
 import numpy as np
 import matplotlib.pyplot as plt
 from p2mUtils.viz import plotCubicSpline
-#from simpleRotoDataset import SimpleRotoDataset
 from torch_geometric.data import DataLoader
 from torchvision.transforms import ToPILImage
 
@@ -76,8 +75,6 @@ def distance_to_single_curve(source_points, curve):
 
     return distances
 
-def discrepancy_l2_squared(distance_field_A, distance_field_B):
-    return (distance_field_A - distance_field_B) ** 2
 
 def distance_field_loss(distance_field_A, distance_field_B, discrepancy_fn):
     vol_S = distance_field_A.numel()
@@ -110,20 +107,20 @@ def create_ellipse_spline(center_x, center_y, radius_x, radius_y, num_segments=4
 
 
 
-def convert_to_cubic_control_points(tensor):
+def convert_to_cubic_control_points(tensor, device='cuda'):
     control_points = []
 
     for i in range(tensor.shape[1] - 1):
         main_point1_x, main_point1_y, lt1_x, lt1_y, rt1_x, rt1_y = tensor[0, i, :6]
         main_point2_x, main_point2_y, lt2_x, lt2_y, _, _ = tensor[0, i + 1, :6]
 
-        p0 = th.tensor([main_point1_x, main_point1_y])
+        p0 = th.tensor([main_point1_x, main_point1_y], device=device)
         #p1 = p0 + th.tensor([rt1_x, rt1_y])
-        p1 = th.tensor([rt1_x, rt1_y])
+        p1 = th.tensor([rt1_x, rt1_y], device=device)
         # p2 = th.tensor([main_point2_x, main_point2_y]) + th.tensor([lt2_x, lt2_y])
         # p3 = th.tensor([main_point2_x, main_point2_y])
-        p2 = th.tensor([lt2_x, lt2_y])
-        p3 = th.tensor([main_point2_x, main_point2_y])
+        p2 = th.tensor([lt2_x, lt2_y], device=device)
+        p3 = th.tensor([main_point2_x, main_point2_y], device=device)
 
         control_points.append(th.stack([p0, p1, p2, p3]))
 
@@ -131,12 +128,12 @@ def convert_to_cubic_control_points(tensor):
     main_point1_x, main_point1_y, lt1_x, lt1_y, rt1_x, rt1_y = tensor[0, -1, :6]
     main_point2_x, main_point2_y, lt2_x, lt2_y, _, _ = tensor[0, 0, :6]
 
-    p0 = th.tensor([main_point1_x, main_point1_y])
+    p0 = th.tensor([main_point1_x, main_point1_y], device=device)
     #p1 = p0 + th.tensor([rt1_x, rt1_y])
-    p1 =  th.tensor([rt1_x, rt1_y])
+    p1 =  th.tensor([rt1_x, rt1_y], device=device)
     #p2 = th.tensor([main_point2_x, main_point2_y]) + th.tensor([lt2_x, lt2_y])
-    p2 = th.tensor([lt2_x, lt2_y])
-    p3 = th.tensor([main_point2_x, main_point2_y])
+    p2 = th.tensor([lt2_x, lt2_y], device=device)
+    p3 = th.tensor([main_point2_x, main_point2_y], device=device)
 
     control_points.append(th.stack([p0, p1, p2, p3]))
 
@@ -165,7 +162,7 @@ def create_grid_points(grid_size, xmin, xmax, ymin, ymax):
 
 
 if __name__ == '__main__':
-
+    from simpleRotoDataset import SimpleRotoDataset
     dataset = SimpleRotoDataset(root=r'D:\pyG\data\points\120423_183451_rev',labelsJson="points120423_183451_rev.json")
     print(len(dataset))
     print(dataset[59])

@@ -29,7 +29,7 @@ class Model(nn.Module):
         # self.unpool_layers.append(
         #     GraphPooling(tensor_dict=self.tensor_dict, pool_id=2))
 
-    def forward(self, img_inp):
+    def forward(self, img_inp,label_inp=None):
         #write image 2 tensorboard
         image_to_tensorboard(self.writer,0,img_inp[0],name="model_input")
 
@@ -37,7 +37,11 @@ class Model(nn.Module):
         reshape = len(img_inp.shape) == 3
         if reshape:
             img_inp = img_inp.unsqueeze(0)
-        inputs = get_features(self.ellipse, img_inp)
+
+        if label_inp is not None:
+            inputs=label_inp
+        else:
+            inputs = get_features(self.ellipse, img_inp)
         #if inputs dim3 is 6 then reshape dim3 to 2 and dim2 should be 3 times bigger
         #if inputs.shape[2]==6:
         #    inputs=inputs.reshape(inputs.shape[0],inputs.shape[1]*3,2)
@@ -104,6 +108,7 @@ class GCN(Model):
         self.args = args
         self.build()
         self.writer=writer
+        self.inSpline=None
 
     def _build(self):
         FLAGS = self.args
